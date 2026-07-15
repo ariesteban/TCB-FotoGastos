@@ -164,6 +164,12 @@ function leerCampos(){
 function okChip(txt){ return `<span class="chip ok"><span class="dot"></span>${txt}</span>`; }
 function warnChip(txt){ return `<span class="chip warn"><span class="dot"></span>${txt}</span>`; }
 
+// Deshabilita los campos mientras Gemini lee, para que una edición manual no pueda ser
+// pisada por la respuesta tardía del OCR (los inputs deshabilitados no emiten 'change').
+function setCamposHabilitados(hab){
+  CAMPOS_IDS.forEach(id => { document.getElementById(id).disabled = !hab; });
+}
+
 async function leerDatosDeFactura(){
   const miGen = ++genOCR;
   const key = get('geminiKey', '');
@@ -173,6 +179,7 @@ async function leerDatosDeFactura(){
   // suben metadatos de una factura anterior (riesgo de cumplimiento fiscal).
   window.__datos = { origen: 'cargando' };
   if (!key || !window.__resultado?.canvasFinal){
+    setCamposHabilitados(true);
     origen.hidden = false;
     origen.textContent = key ? 'sin imagen' : 'sin OCR (configura Gemini)';
     window.__datos = { origen: 'manual' };
@@ -180,14 +187,17 @@ async function leerDatosDeFactura(){
     return;
   }
   origen.hidden = false; origen.textContent = 'Leyendo con Gemini…';
+  setCamposHabilitados(false);
   try {
     const datos = await extraerDatos(window.__resultado.canvasFinal, key);
-    if (miGen !== genOCR) return; // llegó una lectura más nueva; descartar esta respuesta obsoleta
+    if (miGen !== genOCR) return; // llegó una lectura más nueva; ella controla los campos
+    setCamposHabilitados(true);
     window.__datos = { ...(datos || {}), origen: datos ? 'gemini' : 'manual' };
     if (datos) normalizarEnCampos(datos);
     origen.textContent = datos ? 'Gemini' : 'sin lectura';
   } catch(e){
     if (miGen !== genOCR) return;
+    setCamposHabilitados(true);
     console.error(e);
     toast('No se pudo leer con Gemini: ' + e.message);
     origen.textContent = 'error de lectura';
