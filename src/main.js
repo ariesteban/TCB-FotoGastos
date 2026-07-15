@@ -507,7 +507,10 @@ async function subirFactura(blob, datos){
   const dup = buscarDuplicado(idx, datos.ncf);
   const nombre = siguienteNombre(fechaISO, await listarNombres(mesId));
   await subirJPEG(blob, nombre, mesId);
-  const entrada = entradaDeFactura(nombre, datos, datos.origen || 'manual', !!dup);
+  // El índice registra la fecha REALMENTE usada para archivar (fechaISO), no el texto crudo:
+  // si el OCR dio una fecha no parseable y se usó el respaldo (hoy), el índice coincide con
+  // la carpeta donde quedó el archivo — trazabilidad fiscal correcta.
+  const entrada = entradaDeFactura(nombre, { ...datos, fechaEmision: fechaISO }, datos.origen || 'manual', !!dup);
   await guardarJSON(mesId, '_gastos.json', agregarEntrada(idx, entrada));
   return { nombre, duplicada: !!dup, duplicadaDe: dup ? dup.archivo : null };
 }
