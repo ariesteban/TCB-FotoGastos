@@ -33,6 +33,7 @@ window.show = show;
 window.toast = toast;
 
 import { iniciarCamara, capturarFrame } from './camera.js';
+import { procesar } from './process.js';
 
 const video = document.getElementById('cam-video');
 const statusTxt = document.getElementById('cam-status-txt');
@@ -51,20 +52,110 @@ document.getElementById('shutter').addEventListener('click', () => {
   window.__captura = { canvas, esquinas: ultimasEsquinas };
   const fx = document.getElementById('flashfx');
   fx.classList.remove('go'); void fx.offsetWidth; fx.classList.add('go');
-  mostrarRevision(canvas);
+  procesarYRevisar();
 });
 
-function mostrarRevision(canvas){
+function pintarEnRevision(canvas){
   const rev = document.getElementById('rev-canvas');
   rev.width = canvas.width; rev.height = canvas.height;
   rev.getContext('2d').drawImage(canvas, 0, 0);
-  document.getElementById('rev-file').textContent = 'Captura sin procesar';
+}
+
+function procesarYRevisar(){
+  const { canvas, esquinas } = window.__captura;
+  let procesado = null;
+  if (esquinas){
+    try { procesado = procesar(canvas, esquinas); }
+    catch(e){ console.error(e); toast('No se pudo procesar; ajusta las esquinas'); }
+  }
+  window.__resultado = { canvasProcesado: procesado, canvasOriginal: canvas, esquinas };
+  pintarEnRevision(procesado || canvas);
+  document.getElementById('rev-file').textContent = procesado ? 'Ortofoto · fondo 254' : 'Sin detección — ajusta las esquinas';
+  document.getElementById('seg-proc').classList.toggle('on', !!procesado);
+  document.getElementById('seg-orig').classList.toggle('on', !procesado);
   show('revision');
 }
-window.mostrarRevision = mostrarRevision;
+window.procesarYRevisar = procesarYRevisar;
+
+document.getElementById('seg-proc').addEventListener('click', () => {
+  if (window.__resultado?.canvasProcesado){ pintarEnRevision(window.__resultado.canvasProcesado);
+    document.getElementById('seg-proc').classList.add('on'); document.getElementById('seg-orig').classList.remove('on'); }
+});
+document.getElementById('seg-orig').addEventListener('click', () => {
+  pintarEnRevision(window.__resultado.canvasOriginal);
+  document.getElementById('seg-orig').classList.add('on'); document.getElementById('seg-proc').classList.remove('on');
+});
+
+// Arrastre de 4 esquinas sobre la imagen original; al soltar se reprocesa.
+const esqCanvas = document.getElementById('rev-esquinas');
+let editandoEsquinas = false, esquinasEdit = null, puntoActivo = -1;
+
+document.getElementById('btn-esquinas').addEventListener('click', () => {
+  if (editandoEsquinas){
+    editandoEsquinas = false;
+    esqCanvas.style.display = 'none';
+    document.getElementById('btn-esquinas').textContent = 'Ajustar esquinas manualmente';
+    window.__captura.esquinas = ordenarEsquinas(esquinasEdit);
+    procesarYRevisar();
+    return;
+  }
+  const { canvasOriginal, esquinas } = window.__resultado;
+  editandoEsquinas = true;
+  const m = 0.1;
+  esquinasEdit = (esquinas || [
+    {x: canvasOriginal.width*m,     y: canvasOriginal.height*m},
+    {x: canvasOriginal.width*(1-m), y: canvasOriginal.height*m},
+    {x: canvasOriginal.width*(1-m), y: canvasOriginal.height*(1-m)},
+    {x: canvasOriginal.width*m,     y: canvasOriginal.height*(1-m)}
+  ]).map(p => ({...p}));
+  pintarEnRevision(canvasOriginal);
+  esqCanvas.style.display = 'block';
+  document.getElementById('btn-esquinas').textContent = 'Aplicar esquinas';
+  dibujarEsquinas();
+});
+
+function dibujarEsquinas(){
+  const rev = document.getElementById('rev-canvas');
+  esqCanvas.width = rev.width; esqCanvas.height = rev.height;
+  const ctx = esqCanvas.getContext('2d');
+  ctx.clearRect(0, 0, esqCanvas.width, esqCanvas.height);
+  ctx.beginPath();
+  esquinasEdit.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+  ctx.closePath();
+  ctx.strokeStyle = '#4E9BEB'; ctx.lineWidth = esqCanvas.width * 0.006; ctx.stroke();
+  esquinasEdit.forEach(p => {
+    ctx.beginPath(); ctx.arc(p.x, p.y, esqCanvas.width * 0.03, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(78,155,235,.9)'; ctx.fill();
+  });
+}
+
+function puntoDesdeEvento(ev){
+  const r = esqCanvas.getBoundingClientRect();
+  const t = ev.touches ? ev.touches[0] : ev;
+  return { x: (t.clientX - r.left) * esqCanvas.width / r.width,
+           y: (t.clientY - r.top) * esqCanvas.height / r.height };
+}
+function empezarArrastre(ev){
+  if (!editandoEsquinas) return;
+  const p = puntoDesdeEvento(ev);
+  puntoActivo = esquinasEdit.findIndex(q => Math.hypot(q.x - p.x, q.y - p.y) < esqCanvas.width * 0.08);
+}
+function mover(ev){
+  if (puntoActivo < 0) return;
+  ev.preventDefault();
+  esquinasEdit[puntoActivo] = puntoDesdeEvento(ev);
+  dibujarEsquinas();
+}
+function soltar(){
+  if (puntoActivo < 0) return;
+  puntoActivo = -1;
+}
+esqCanvas.addEventListener('pointerdown', empezarArrastre);
+esqCanvas.addEventListener('pointermove', mover);
+esqCanvas.addEventListener('pointerup', soltar);
 
 import { cvReady } from './cvready.js';
-import { detectarDocumento, esEstable, nitidez } from './detect.js';
+import { detectarDocumento, esEstable, nitidez, ordenarEsquinas } from './detect.js';
 
 const overlay = document.getElementById('cam-overlay');
 let ultimasEsquinas = null;
@@ -109,7 +200,7 @@ async function buclDeteccion(){
           const fx = document.getElementById('flashfx');
           fx.classList.remove('go'); void fx.offsetWidth; fx.classList.add('go');
           window.__captura = { canvas: capturarFrame(video), esquinas };
-          setTimeout(() => { mostrarRevision(window.__captura.canvas); disparando = false; }, 350);
+          setTimeout(() => { procesarYRevisar(); disparando = false; }, 350);
         }
       } else {
         estables = 0;
