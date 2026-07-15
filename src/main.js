@@ -460,7 +460,7 @@ inpClient.addEventListener('change', () => set('clientId', inpClient.value.trim(
 inpCarpeta.addEventListener('change', () => { set('carpetaRaiz', inpCarpeta.value.trim() || 'Gastos_NCF'); set('carpetaRaizId', null); });
 
 // Conexión a Google Drive (Task 9)
-import { initAuth, conectar, conectado, asegurarCarpeta, buscarCarpeta, listarNombres, subirJPEG, leerJSON } from './drive.js';
+import { initAuth, conectar, conectado, asegurarCarpeta, buscarCarpeta, listarNombres, subirJPEG, leerJSON, guardarJSON } from './drive.js';
 
 document.getElementById('btn-conectar').addEventListener('click', async () => {
   const btn = document.getElementById('btn-conectar');
@@ -492,19 +492,34 @@ import { nombreCarpetaMes, siguienteNombre, hoyISO } from './naming.js';
 // Cola offline en IndexedDB con reintento al reconectar (Task 11)
 import { encolar, pendientes, eliminar, cuenta } from './queue.js';
 
-async function subirFactura(blob, fechaISO){
+// Índice _gastos.json por mes (Task 5): archiva por fecha de EMISIÓN (con respaldo a
+// la fecha del dispositivo), registra metadatos y marca duplicados sin bloquear la subida.
+import { agregarEntrada, entradaDeFactura } from './indice.js';
+
+async function subirFactura(blob, datos){
   const raizId = get('carpetaRaizId');
   if (!conectado() || !raizId) throw new Error('sin-conexion');
+  const fechaISO = normalizarFecha(datos.fechaEmision) || hoyISO(); // respaldo: fecha del dispositivo
   const mesId = await asegurarCarpeta(nombreCarpetaMes(fechaISO), raizId);
+  const idx = await leerJSON(mesId, '_gastos.json');
+  // Re-chequeo definitivo contra el índice actual (cubre reintentos de la cola offline,
+  // donde el duplicado pudo registrarse después de que la factura se encoló).
+  const dup = buscarDuplicado(idx, datos.ncf);
   const nombre = siguienteNombre(fechaISO, await listarNombres(mesId));
   await subirJPEG(blob, nombre, mesId);
-  return nombre;
+  const entrada = entradaDeFactura(nombre, datos, datos.origen || 'manual', !!dup);
+  await guardarJSON(mesId, '_gastos.json', agregarEntrada(idx, entrada));
+  return { nombre, duplicada: !!dup, duplicadaDe: dup ? dup.archivo : null };
 }
 
 document.getElementById('confirm-btn').addEventListener('click', async () => {
   const res = window.__resultado;
   if (!res) return;
   const canvas = res.canvasFinal || res.canvasOriginal;
+  // Se congelan los datos ANTES del await de la subida: si el usuario edita los campos
+  // mientras la factura sube, no queremos que un cambio a mitad de camino contamine
+  // el registro fiscal que se está escribiendo en _gastos.json.
+  const datos = window.__datos || {};
   const btn = document.getElementById('confirm-btn');
   btn.disabled = true; btn.textContent = 'Subiendo…';
   let blob;
@@ -512,21 +527,21 @@ document.getElementById('confirm-btn').addEventListener('click', async () => {
   try {
     blob = await canvasAJpeg(canvas);
     if (colaEnProceso){
-      await encolar({ blob, fechaISO: hoyISO() });
+      await encolar({ blob, datos });
       toast('Subida en curso — factura añadida a la cola');
       actualizarBadge();
       show('camara');
       return;
     }
     colaEnProceso = true; lockAdquirido = true;
-    const nombre = await subirFactura(blob, hoyISO());
-    toast(`Subida: ${nombre} ✓`);
+    const { nombre, duplicada } = await subirFactura(blob, datos);
+    toast(duplicada ? `Subida: ${nombre} — marcada como DUPLICADA (revísala en Gastos)` : `Subida: ${nombre} ✓`);
     show('gastos');
     refrescarGastos();
   } catch(e){
     console.error(e);
     if (e.message === 'sin-conexion'){
-      await encolar({ blob, fechaISO: hoyISO() });
+      await encolar({ blob, datos });
       toast('Sin conexión con Drive — en cola; reconecta en Ajustes para subirla');
       document.getElementById('gastos-sub').textContent = 'Google Drive · reconectar en Ajustes';
       actualizarBadge();
@@ -554,9 +569,11 @@ async function procesarCola(){
   try {
     for (const item of await pendientes()){
       try {
-        const nombre = await subirFactura(item.blob, item.fechaISO);
+        // subirFactura re-chequea duplicado contra el índice _gastos.json vigente en
+        // este momento (no el de cuando se encoló), por eso no se recalcula aquí.
+        const { nombre, duplicada } = await subirFactura(item.blob, item.datos);
         await eliminar(item.id);
-        toast(`Cola: ${nombre} subida ✓`);
+        toast(duplicada ? `Cola: ${nombre} subida — marcada como DUPLICADA` : `Cola: ${nombre} subida ✓`);
       } catch(e){ break; }
     }
   } finally {
@@ -574,7 +591,13 @@ async function refrescarGastos(){
   if (!conectado() || !raizId) return;
   try {
     const mesId = await asegurarCarpeta(carpetaMes, raizId);
-    const nombres = (await listarNombres(mesId)).filter(n => /^Compra_/i.test(n));
+    // El índice es opcional (mes recién creado o _gastos.json aún inexistente); si falla
+    // la lectura, se sigue mostrando la lista sin el marcado de duplicadas.
+    const [nombres, idx] = await Promise.all([
+      listarNombres(mesId).then(ns => ns.filter(n => /^Compra_/i.test(n))),
+      leerJSON(mesId, '_gastos.json').catch(() => null)
+    ]);
+    const duplicadaPorArchivo = new Map((idx?.facturas || []).map(f => [f.archivo, !!f.duplicada]));
     const num = n => { const m = n.match(/^Compra_(\d+)/i); return m ? parseInt(m[1], 10) : -1; };
     nombres.sort((a, b) => num(b) - num(a));
     document.getElementById('mes-meta').textContent = `${nombres.length} facturas este mes`;
@@ -584,7 +607,8 @@ async function refrescarGastos(){
       lista.innerHTML = '<div class="gem-note">Aún no hay facturas este mes.</div>';
     } else {
       nombres.forEach(n => {
-        const inv = document.createElement('div'); inv.className = 'inv';
+        const inv = document.createElement('div');
+        inv.className = duplicadaPorArchivo.get(n) ? 'inv dup' : 'inv';
         const thumb = document.createElement('div'); thumb.className = 'thumb'; thumb.textContent = 'JPG';
         const info = document.createElement('div');
         const nm = document.createElement('div'); nm.className = 'nm num'; nm.textContent = n;
