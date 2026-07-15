@@ -4,12 +4,16 @@ import { dimensionesDestino } from './detect.js';
 export function ortofoto(srcMat, esquinas){
   const { w, h } = dimensionesDestino(esquinas);
   let src, dst, M;
-  const out = new cv.Mat();
+  let out = null;
   try {
+    out = new cv.Mat();
     src = cv.matFromArray(4, 1, cv.CV_32FC2, esquinas.flatMap(p => [p.x, p.y]));
     dst = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, w, 0, w, h, 0, h]);
     M = cv.getPerspectiveTransform(src, dst);
     cv.warpPerspective(srcMat, out, M, new cv.Size(w, h), cv.INTER_LINEAR, cv.BORDER_REPLICATE);
+  } catch(e){
+    if (out) out.delete();
+    throw e;
   } finally {
     if (src) src.delete();
     if (dst) dst.delete();
@@ -24,8 +28,9 @@ export function limpiarFondo(rgbaMat){
   const rgb = new cv.Mat();
   const canales = new cv.MatVector(), limpios = new cv.MatVector();
   const merged = new cv.Mat();
-  const rgba = new cv.Mat();
+  let rgba = null;
   try {
+    rgba = new cv.Mat();
     cv.cvtColor(rgbaMat, rgb, cv.COLOR_RGBA2RGB);
     cv.split(rgb, canales);
     const k = Math.max(31, ((Math.min(rgb.rows, rgb.cols) / 8) | 0) | 1); // kernel impar grande
@@ -46,6 +51,9 @@ export function limpiarFondo(rgbaMat){
     }
     cv.merge(limpios, merged);
     cv.cvtColor(merged, rgba, cv.COLOR_RGB2RGBA);
+  } catch(e){
+    if (rgba) rgba.delete();
+    throw e;
   } finally {
     rgb.delete(); merged.delete();
     canales.delete(); limpios.delete();

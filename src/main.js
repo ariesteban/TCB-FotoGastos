@@ -78,10 +78,13 @@ function procesarYRevisar(){
 window.procesarYRevisar = procesarYRevisar;
 
 document.getElementById('seg-proc').addEventListener('click', () => {
-  if (window.__resultado?.canvasProcesado){ pintarEnRevision(window.__resultado.canvasProcesado);
+  if (!window.__resultado) return;
+  if (window.__resultado.canvasProcesado){ pintarEnRevision(window.__resultado.canvasProcesado);
     document.getElementById('seg-proc').classList.add('on'); document.getElementById('seg-orig').classList.remove('on'); }
+  else { toast('Aún no hay versión procesada — aplica las esquinas'); }
 });
 document.getElementById('seg-orig').addEventListener('click', () => {
+  if (!window.__resultado) return;
   pintarEnRevision(window.__resultado.canvasOriginal);
   document.getElementById('seg-orig').classList.add('on'); document.getElementById('seg-proc').classList.remove('on');
 });
@@ -91,6 +94,7 @@ const esqCanvas = document.getElementById('rev-esquinas');
 let editandoEsquinas = false, esquinasEdit = null, puntoActivo = -1;
 
 document.getElementById('btn-esquinas').addEventListener('click', () => {
+  if (!window.__resultado) return;
   if (editandoEsquinas){
     editandoEsquinas = false;
     esqCanvas.style.display = 'none';
@@ -111,6 +115,9 @@ document.getElementById('btn-esquinas').addEventListener('click', () => {
   pintarEnRevision(canvasOriginal);
   esqCanvas.style.display = 'block';
   document.getElementById('btn-esquinas').textContent = 'Aplicar esquinas';
+  document.getElementById('rev-file').textContent = 'Ajustando esquinas — arrastra los 4 puntos';
+  document.getElementById('seg-orig').classList.add('on');
+  document.getElementById('seg-proc').classList.remove('on');
   dibujarEsquinas();
 });
 
@@ -131,9 +138,8 @@ function dibujarEsquinas(){
 
 function puntoDesdeEvento(ev){
   const r = esqCanvas.getBoundingClientRect();
-  const t = ev.touches ? ev.touches[0] : ev;
-  return { x: (t.clientX - r.left) * esqCanvas.width / r.width,
-           y: (t.clientY - r.top) * esqCanvas.height / r.height };
+  return { x: (ev.clientX - r.left) * esqCanvas.width / r.width,
+           y: (ev.clientY - r.top) * esqCanvas.height / r.height };
 }
 function empezarArrastre(ev){
   if (!editandoEsquinas) return;
