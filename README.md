@@ -8,7 +8,7 @@ Prototipo de interfaz de **TCB FotoGastos**, una PWA de **TCB — Tax Consulting
 
 En iPhone: abrir en Safari → Compartir → **Añadir a pantalla de inicio**.
 
-> Estado: prototipo navegable (v0.5). Los datos que se muestran son genéricos de ejemplo; ninguna función es real todavía.
+> Estado: **Fase 1 funcional** — captura con auto-disparo, ortofoto fondo 254 y subida a Google Drive. La maqueta de referencia sigue en `/prototipo/`.
 
 ## Pantallas
 
