@@ -310,16 +310,22 @@ async function actualizarBadge(){
   b.textContent = n;
 }
 
+let colaEnProceso = false;
 async function procesarCola(){
-  if (!conectado()) return;
-  for (const item of await pendientes()){
-    try {
-      const nombre = await subirFactura(item.blob, item.fechaISO);
-      await eliminar(item.id);
-      toast(`Cola: ${nombre} subida ✓`);
-    } catch(e){ break; } // se reintenta en la próxima conexión
+  if (colaEnProceso || !conectado()) return;
+  colaEnProceso = true;
+  try {
+    for (const item of await pendientes()){
+      try {
+        const nombre = await subirFactura(item.blob, item.fechaISO);
+        await eliminar(item.id);
+        toast(`Cola: ${nombre} subida ✓`);
+      } catch(e){ break; }
+    }
+  } finally {
+    colaEnProceso = false;
+    actualizarBadge();
   }
-  actualizarBadge();
 }
 window.addEventListener('online', procesarCola);
 actualizarBadge();
