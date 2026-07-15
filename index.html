@@ -44,6 +44,16 @@
         <div><h2>Revisar factura</h2><div class="hsub num" id="rev-file">—</div></div>
       </div>
       <div class="scroll">
+        <div class="filtros" role="tablist" id="filtros">
+          <button class="filtro on" data-modo="color">Auto-color</button>
+          <button class="filtro" data-modo="byn">Blanco y negro</button>
+          <button class="filtro" data-modo="grises">Grises</button>
+          <button class="filtro" data-modo="original">Original</button>
+        </div>
+        <label class="intensidad-row" id="intensidad-row">
+          <span>Intensidad</span>
+          <input type="range" id="intensidad" min="0" max="100" value="65">
+        </label>
         <div class="seg" role="tablist">
           <button class="on" id="seg-proc">Procesada · se guarda así</button>
           <button id="seg-orig">Original de cámara</button>
@@ -100,6 +110,11 @@
         </div>
       </div>
     </section>
+  </div>
+
+  <div class="overlay-proc" id="overlay-proc" aria-live="polite" hidden>
+    <div class="spinner" role="status"></div>
+    <div class="proc-txt">Procesando…</div>
   </div>
 
   <div class="toast" id="toast" role="status"></div>
