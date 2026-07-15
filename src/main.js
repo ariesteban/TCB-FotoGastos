@@ -36,6 +36,7 @@ import { iniciarCamara, capturarFrame } from './camera.js';
 import { procesar, aplicarRealce, canvasAJpeg } from './process.js';
 import { get, set } from './settings.js';
 import { extraerDatos } from './gemini.js';
+import { extraerDatosLocal } from './ocrlocal.js';
 import { ncfValido, normalizarFecha, buscarDuplicado, montoValido } from './validacion.js';
 
 // Muestra el overlay "Procesando…" antes de ejecutar trabajo síncrono pesado (OpenCV.js
@@ -55,6 +56,14 @@ function conOverlay(fn){
 // del realce es fija (el contraste "fuerte" que se validó en campo).
 let modo = get('modoImagen', 'color');
 const intensidad = 65;
+
+// Modelo de Gemini elegido en Ajustes (por defecto 3.5 Flash).
+let geminiModelo = get('geminiModelo', 'gemini-3.5-flash');
+const ETIQUETA_MODELO = {
+  'gemini-3.5-flash': 'Gemini 3.5 Flash',
+  'gemini-3-flash': 'Gemini 3 Flash',
+  'gemini-2.5-flash': 'Gemini 2.5 Flash'
+};
 
 const video = document.getElementById('cam-video');
 const statusTxt = document.getElementById('cam-status-txt');
@@ -177,35 +186,46 @@ async function leerDatosDeFactura(){
   const miGen = ++genOCR;
   const key = get('geminiKey', '');
   const origen = document.getElementById('datos-origen');
+  const nota = document.getElementById('nota-verificar');
   vaciarCampos();
+  nota.hidden = true;
   // Reset del estado ANTES del await: si el usuario confirma durante la carga, no se
   // suben metadatos de una factura anterior (riesgo de cumplimiento fiscal).
   window.__datos = { origen: 'cargando' };
-  if (!key || !window.__resultado?.canvasFinal){
+  const canvas = window.__resultado?.canvasFinal;
+  if (!canvas){
     setCamposHabilitados(true);
-    origen.hidden = false;
-    origen.textContent = key ? 'sin imagen' : 'sin OCR (configura Gemini)';
+    origen.hidden = false; origen.textContent = 'sin imagen';
     window.__datos = { origen: 'manual' };
     await validarCampos(miGen);
     return;
   }
-  origen.hidden = false; origen.textContent = 'Leyendo con Gemini…';
+  // Motor: con key intenta Gemini y si la red falla cae a OCR local; sin key, OCR local.
+  origen.hidden = false;
+  origen.textContent = key ? `Leyendo con ${ETIQUETA_MODELO[geminiModelo] || geminiModelo}…` : 'Leyendo (OCR local)…';
   setCamposHabilitados(false);
+  let datos = null, motor = 'manual';
   try {
-    const datos = await extraerDatos(window.__resultado.canvasFinal, key);
-    if (miGen !== genOCR) return; // llegó una lectura más nueva; ella controla los campos
-    setCamposHabilitados(true);
-    window.__datos = { ...(datos || {}), origen: datos ? 'gemini' : 'manual' };
-    if (datos) normalizarEnCampos(datos);
-    origen.textContent = datos ? 'Gemini' : 'sin lectura';
-  } catch(e){
-    if (miGen !== genOCR) return;
-    setCamposHabilitados(true);
-    console.error(e);
-    toast('No se pudo leer con Gemini: ' + e.message);
-    origen.textContent = 'error de lectura';
-    window.__datos = { origen: 'manual' };
-  }
+    if (key){
+      try { datos = await extraerDatos(canvas, key, geminiModelo); motor = 'gemini'; }
+      catch(e){ // sin conexión / error HTTP → respaldo local
+        console.error(e);
+        // Si el error es de credenciales/cuota (no de red), avisar que revise la API key
+        // en vez de degradar en silencio; igual se cae a OCR local para no bloquear.
+        if (/\b(400|401|403|429)\b/.test(e.message || '')) toast('Problema con la API key de Gemini — revísala en Ajustes');
+        origen.textContent = 'Leyendo (OCR local)…';
+        datos = await extraerDatosLocal(canvas); motor = 'local';
+      }
+    } else {
+      datos = await extraerDatosLocal(canvas); motor = 'local';
+    }
+  } catch(e){ console.error(e); toast('No se pudo leer la factura; escribe los datos'); datos = null; motor = 'manual'; }
+  if (miGen !== genOCR) return; // llegó una lectura más nueva; ella controla los campos
+  setCamposHabilitados(true);
+  window.__datos = { ...(datos || {}), origen: motor };
+  if (datos) normalizarEnCampos(datos);
+  origen.textContent = motor === 'gemini' ? (ETIQUETA_MODELO[geminiModelo] || geminiModelo) : (motor === 'local' ? 'OCR local' : 'sin lectura');
+  nota.hidden = motor !== 'local'; // alerta sutil solo cuando el OCR fue local
   await validarCampos(miGen);
 }
 
@@ -465,6 +485,20 @@ inpCarpeta.addEventListener('change', () => { set('carpetaRaiz', inpCarpeta.valu
 const inpGemini = document.getElementById('inp-gemini');
 inpGemini.value = get('geminiKey', '');
 inpGemini.addEventListener('change', () => set('geminiKey', inpGemini.value.trim()));
+
+// Selector de modelo de Gemini
+const modeloEl = document.getElementById('modelo-gemini');
+function actualizarUIModelo(){
+  modeloEl.querySelectorAll('.filtro').forEach(b => b.classList.toggle('on', b.dataset.modelo === geminiModelo));
+}
+actualizarUIModelo();
+modeloEl.addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.filtro');
+  if (!btn) return;
+  geminiModelo = btn.dataset.modelo;
+  set('geminiModelo', geminiModelo);
+  actualizarUIModelo();
+});
 
 // Conexión a Google Drive (Task 9)
 import { initAuth, conectar, conectado, asegurarCarpeta, buscarCarpeta, listarNombres, subirJPEG, leerJSON, guardarJSON } from './drive.js';
