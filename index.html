@@ -149,7 +149,7 @@
   .month-pill{
     position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:5;
     background:rgba(10,17,30,.78); backdrop-filter:blur(8px);
-    border:1px solid var(--line); border-radius:99px; padding:7px 14px;
+    border:1px solid #34455F; border-radius:99px; padding:7px 14px;
     display:flex; gap:8px; align-items:baseline; white-space:nowrap;
   }
   .month-pill b{font-size:13px; color:#EAF2FA; font-weight:700}
@@ -165,8 +165,8 @@
   .frame-svg .corner{stroke:#7FBCF5; stroke-width:5; fill:none}
   .cam-status{
     position:absolute; bottom:14px; left:50%; transform:translateX(-50%); z-index:5;
-    background:rgba(10,17,30,.82); border:1px solid var(--line); border-radius:99px;
-    font-size:12.5px; font-weight:600; padding:7px 14px; color:var(--dim);
+    background:rgba(10,17,30,.82); border:1px solid #34455F; border-radius:99px;
+    font-size:12.5px; font-weight:600; padding:7px 14px; color:#E9F1F8;
     display:flex; align-items:center; gap:8px; white-space:nowrap; transition:color .3s;
   }
   .cam-status.lock{color:#8FD8B2}
@@ -179,9 +179,10 @@
     flex:none; display:flex; align-items:center; justify-content:space-between;
     padding:14px 38px 10px; background:#05080F;
   }
+  /* Controles de cámara: siempre claros sobre fondo oscuro (el visor real de la cámara) */
   .cam-side{
-    width:46px;height:46px;border-radius:50%;border:1px solid var(--line);
-    background:var(--glass); color:var(--silver); display:grid;place-items:center;
+    width:46px;height:46px;border-radius:50%;border:1px solid #3E4E68;
+    background:rgba(255,255,255,.07); color:#E8EFF6; display:grid;place-items:center;
     cursor:pointer; position:relative; font-family:inherit;
   }
   .cam-side svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
@@ -202,8 +203,8 @@
     background:linear-gradient(180deg,#F4F8FC,#C3D2E2);
     box-shadow:inset 0 -3px 8px rgba(20,40,70,.35);
   }
-  .cam-note{flex:none; text-align:center; font-size:11.5px; color:var(--faint); padding-bottom:10px; background:#05080F}
-  .cam-note b{color:var(--accent); font-weight:650}
+  .cam-note{flex:none; text-align:center; font-size:11.5px; color:#93A2B4; padding-bottom:10px; background:#05080F}
+  .cam-note b{color:#5E9BD6; font-weight:650}
 
   /* ---------- factura simulada ---------- */
   .receipt{
