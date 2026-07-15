@@ -59,6 +59,11 @@ const intensidad = 65;
 
 // Modelo de Gemini elegido en Ajustes (por defecto 3.5 Flash).
 let geminiModelo = get('geminiModelo', 'gemini-3.5-flash');
+const ETIQUETA_MODELO = {
+  'gemini-3.5-flash': 'Gemini 3.5 Flash',
+  'gemini-3-flash': 'Gemini 3 Flash',
+  'gemini-2.5-flash': 'Gemini 2.5 Flash'
+};
 
 const video = document.getElementById('cam-video');
 const statusTxt = document.getElementById('cam-status-txt');
@@ -197,7 +202,7 @@ async function leerDatosDeFactura(){
   }
   // Motor: con key intenta Gemini y si la red falla cae a OCR local; sin key, OCR local.
   origen.hidden = false;
-  origen.textContent = key ? `Leyendo con ${geminiModelo}…` : 'Leyendo (OCR local)…';
+  origen.textContent = key ? `Leyendo con ${ETIQUETA_MODELO[geminiModelo] || geminiModelo}…` : 'Leyendo (OCR local)…';
   setCamposHabilitados(false);
   let datos = null, motor = 'manual';
   try {
@@ -205,6 +210,10 @@ async function leerDatosDeFactura(){
       try { datos = await extraerDatos(canvas, key, geminiModelo); motor = 'gemini'; }
       catch(e){ // sin conexión / error HTTP → respaldo local
         console.error(e);
+        // Si el error es de credenciales/cuota (no de red), avisar que revise la API key
+        // en vez de degradar en silencio; igual se cae a OCR local para no bloquear.
+        if (/\b(400|401|403|429)\b/.test(e.message || '')) toast('Problema con la API key de Gemini — revísala en Ajustes');
+        origen.textContent = 'Leyendo (OCR local)…';
         datos = await extraerDatosLocal(canvas); motor = 'local';
       }
     } else {
@@ -215,7 +224,7 @@ async function leerDatosDeFactura(){
   setCamposHabilitados(true);
   window.__datos = { ...(datos || {}), origen: motor };
   if (datos) normalizarEnCampos(datos);
-  origen.textContent = motor === 'gemini' ? geminiModelo : (motor === 'local' ? 'OCR local' : 'sin lectura');
+  origen.textContent = motor === 'gemini' ? (ETIQUETA_MODELO[geminiModelo] || geminiModelo) : (motor === 'local' ? 'OCR local' : 'sin lectura');
   nota.hidden = motor !== 'local'; // alerta sutil solo cuando el OCR fue local
   await validarCampos(miGen);
 }

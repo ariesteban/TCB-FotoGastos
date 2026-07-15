@@ -113,7 +113,7 @@ export function parsearTextoFactura(texto){
 // --- Integración con Tesseract.js (carga perezosa, solo en navegador) ---
 
 let _tessListo = null;
-let _tessWorker = null;
+let _tessWorkerPromesa = null;
 
 function cargarScriptTesseract(){
   if (_tessListo) return _tessListo;
@@ -122,21 +122,27 @@ function cargarScriptTesseract(){
     const s = document.createElement('script');
     s.src = 'vendor/tesseract/tesseract.min.js';
     s.onload = () => resolve();
-    s.onerror = () => reject(new Error('No se pudo cargar el OCR local'));
+    // No cachear un fallo (p. ej. primer uso offline antes de cachear el script):
+    // resetear para que un reintento posterior pueda volver a cargarlo.
+    s.onerror = () => { _tessListo = null; reject(new Error('No se pudo cargar el OCR local')); };
     document.head.appendChild(s);
   });
   return _tessListo;
 }
 
-async function obtenerWorker(){
-  if (_tessWorker) return _tessWorker;
-  await cargarScriptTesseract();
-  _tessWorker = await Tesseract.createWorker('spa', 1, {
-    workerPath: 'vendor/tesseract/worker.min.js',
-    corePath: 'vendor/tesseract/tesseract-core.wasm.js', // archivo explícito (no-SIMD, universal) — NO usar el directorio
-    langPath: 'vendor/tesseract/'
-  });
-  return _tessWorker;
+// Se cachea la PROMESA (no solo el worker resuelto): llamadas concurrentes comparten un
+// único worker en vez de crear dos (~9 MB c/u). Si falla, se resetea para poder reintentar.
+function obtenerWorker(){
+  if (_tessWorkerPromesa) return _tessWorkerPromesa;
+  _tessWorkerPromesa = (async () => {
+    await cargarScriptTesseract();
+    return Tesseract.createWorker('spa', 1, {
+      workerPath: 'vendor/tesseract/worker.min.js',
+      corePath: 'vendor/tesseract/tesseract-core.wasm.js', // archivo explícito (no-SIMD, universal) — NO usar el directorio
+      langPath: 'vendor/tesseract/'
+    });
+  })().catch(e => { _tessWorkerPromesa = null; throw e; });
+  return _tessWorkerPromesa;
 }
 
 /**
