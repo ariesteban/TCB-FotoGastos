@@ -221,3 +221,13 @@ async function buclDeteccion(){
   tick();
 }
 buclDeteccion();
+
+// Ajustes persistentes (Task 7)
+import { get, set } from './settings.js';
+
+const inpClient = document.getElementById('inp-clientid');
+const inpCarpeta = document.getElementById('inp-carpeta');
+inpClient.value = get('clientId', '');
+inpCarpeta.value = get('carpetaRaiz', 'Gastos_NCF');
+inpClient.addEventListener('change', () => set('clientId', inpClient.value.trim()));
+inpCarpeta.addEventListener('change', () => { set('carpetaRaiz', inpCarpeta.value.trim() || 'Gastos_NCF'); set('carpetaRaizId', null); });
