@@ -174,7 +174,7 @@ esqCanvas.addEventListener('pointermove', mover);
 esqCanvas.addEventListener('pointerup', soltar);
 
 import { cvReady } from './cvready.js';
-import { detectarDocumento, esEstable, nitidez, nitidezRegion, ordenarEsquinas } from './detect.js';
+import { detectarDocumento, esEstable, nitidezRegion, ordenarEsquinas } from './detect.js';
 
 const overlay = document.getElementById('cam-overlay');
 let ultimasEsquinas = null;
