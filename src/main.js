@@ -49,9 +49,10 @@ function conOverlay(fn){
   });
 }
 
-// Modo de realce e intensidad — persisten en Ajustes y se re-aplican sin re-warpar.
+// Modo de realce — persiste en Ajustes y se re-aplica sin re-warpar. La intensidad
+// del realce es fija (el contraste "fuerte" que se validó en campo).
 let modo = get('modoImagen', 'color');
-let intensidad = get('intensidad', 65);
+const intensidad = 65;
 
 const video = document.getElementById('cam-video');
 const statusTxt = document.getElementById('cam-status-txt');
@@ -139,23 +140,14 @@ async function reprocesarRealce(){
   document.getElementById('seg-orig').classList.remove('on');
 }
 
-// Controles de filtro/intensidad: existen en Revisión (por factura) y en Ajustes (por defecto).
-// Ambos manejan el MISMO estado `modo`/`intensidad`, así que se mantienen sincronizados.
+// Selector de modo de imagen: existe en Revisión (por factura) y en Ajustes (por defecto).
+// Ambos manejan el MISMO estado `modo`, así que se mantienen sincronizados.
 const filtrosEl = document.getElementById('filtros');
 const filtrosDefEl = document.getElementById('filtros-def');
-const intensidadRow = document.getElementById('intensidad-row');
-const intensidadRowDef = document.getElementById('intensidad-row-def');
-const intensidadInput = document.getElementById('intensidad');
-const intensidadDefInput = document.getElementById('intensidad-def');
 
 function actualizarUIFiltros(){
   [filtrosEl, filtrosDefEl].forEach(cont =>
     cont.querySelectorAll('.filtro').forEach(b => b.classList.toggle('on', b.dataset.modo === modo)));
-  intensidadInput.value = intensidad;
-  intensidadDefInput.value = intensidad;
-  const esOriginal = modo === 'original';
-  intensidadRow.hidden = esOriginal;       // la intensidad no aplica en modo "Original"
-  intensidadRowDef.hidden = esOriginal;
 }
 actualizarUIFiltros();
 
@@ -165,19 +157,26 @@ function cambiarModo(nuevo){
   actualizarUIFiltros();
   if (window.__resultado && window.__resultado.canvasPlano) reprocesarRealce();
 }
-function cambiarIntensidad(valor){
-  intensidad = parseInt(valor, 10);
-  set('intensidad', intensidad);
-  actualizarUIFiltros();
-  if (window.__resultado && window.__resultado.canvasPlano) reprocesarRealce();
-}
 
 [filtrosEl, filtrosDefEl].forEach(cont => cont.addEventListener('click', (ev) => {
   const btn = ev.target.closest('.filtro');
   if (btn) cambiarModo(btn.dataset.modo);
 }));
-intensidadInput.addEventListener('change', () => cambiarIntensidad(intensidadInput.value));
-intensidadDefInput.addEventListener('change', () => cambiarIntensidad(intensidadDefInput.value));
+
+// Visor a pantalla completa: tocar la imagen revisada la abre grande; la X (o el fondo) la cierra.
+const visor = document.getElementById('visor');
+const visorImg = document.getElementById('visor-img');
+function abrirVisor(){
+  if (editandoEsquinas) return; // en modo esquinas, el toque es para arrastrar, no para el visor
+  const rev = document.getElementById('rev-canvas');
+  if (!rev.width) return;
+  visorImg.src = rev.toDataURL('image/jpeg', 0.92);
+  visor.hidden = false;
+}
+function cerrarVisor(){ visor.hidden = true; visorImg.removeAttribute('src'); }
+document.getElementById('rev-canvas').addEventListener('click', abrirVisor);
+document.getElementById('visor-cerrar').addEventListener('click', cerrarVisor);
+visor.addEventListener('click', (ev) => { if (ev.target === visor) cerrarVisor(); }); // toque en el fondo cierra
 
 document.getElementById('seg-proc').addEventListener('click', () => {
   if (!window.__resultado) return;

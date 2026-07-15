@@ -50,17 +50,13 @@
           <button class="filtro" data-modo="grises">Grises</button>
           <button class="filtro" data-modo="original">Original</button>
         </div>
-        <label class="intensidad-row" id="intensidad-row">
-          <span>Intensidad</span>
-          <input type="range" id="intensidad" min="0" max="100" value="65">
-        </label>
         <div class="seg" role="tablist">
           <button class="on" id="seg-proc">Procesada · se guarda así</button>
           <button id="seg-orig">Original de cámara</button>
         </div>
-        <div class="stage" id="stage" style="min-height:300px">
+        <div class="stage" id="stage" style="min-height:340px">
           <div id="rev-wrap" style="position:relative; display:grid; max-width:100%">
-            <canvas id="rev-canvas" style="max-width:100%; max-height:60vh; border-radius:4px; box-shadow:0 10px 26px rgba(0,0,0,.45)"></canvas>
+            <canvas id="rev-canvas" title="Toca para ver en pantalla completa" style="max-width:100%; max-height:66vh; border-radius:4px; box-shadow:0 10px 26px rgba(0,0,0,.45); cursor:zoom-in"></canvas>
             <canvas id="rev-esquinas" style="position:absolute; inset:0; width:100%; height:100%; display:none; touch-action:none"></canvas>
           </div>
         </div>
@@ -103,9 +99,7 @@
             <button class="filtro" data-modo="grises">Grises</button>
             <button class="filtro" data-modo="original">Original</button>
           </div>
-          <label class="intensidad-row" id="intensidad-row-def"><span>Intensidad por defecto</span>
-            <input type="range" id="intensidad-def" min="0" max="100" value="65"></label>
-          <div class="gem-note" style="margin-top:8px">Se aplica a cada factura nueva. Puedes ajustarlo por factura en la pantalla de revisión.</div>
+          <div class="gem-note" style="margin-top:8px">Se aplica a cada factura nueva. Puedes cambiarlo por factura en la pantalla de revisión.</div>
         </div>
         <div class="card">
           <div class="eyebrow" style="margin-bottom:4px">Google Drive</div>
@@ -122,6 +116,11 @@
         </div>
       </div>
     </section>
+  </div>
+
+  <div class="visor" id="visor" hidden>
+    <button class="visor-cerrar" id="visor-cerrar" aria-label="Cerrar pantalla completa">✕</button>
+    <img id="visor-img" alt="Factura escaneada a pantalla completa">
   </div>
 
   <div class="overlay-proc" id="overlay-proc" aria-live="polite" hidden>

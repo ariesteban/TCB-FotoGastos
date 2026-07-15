@@ -252,6 +252,21 @@ body{
 .proc-txt{color:#E9F1F8; font-size:14px; font-weight:600}
 @keyframes girar{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){ .spinner{animation:none} }
+/* Visor a pantalla completa de la factura escaneada (fondo oscuro en ambos temas). */
+.visor{
+  position:absolute; inset:0; z-index:60; background:#06090F;
+  display:flex; align-items:center; justify-content:center;
+  padding:calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));
+}
+.visor[hidden]{display:none}
+.visor img{max-width:100%; max-height:100%; object-fit:contain; border-radius:3px}
+.visor-cerrar{
+  position:absolute; top:calc(10px + env(safe-area-inset-top)); right:12px; z-index:61;
+  width:44px; height:44px; border-radius:50%; border:1px solid rgba(255,255,255,.22);
+  background:rgba(20,28,42,.85); color:#EAF1F8; font-size:20px; line-height:1;
+  cursor:pointer; display:grid; place-items:center; font-family:inherit;
+}
+.visor-cerrar:focus-visible{outline:2px solid #fff; outline-offset:2px}
 .stage{
   border-radius:var(--r); border:1px solid var(--line-soft); overflow:hidden; position:relative;
   background:radial-gradient(120% 100% at 50% 0%, #1B2740, #0D1526); min-height:250px;
