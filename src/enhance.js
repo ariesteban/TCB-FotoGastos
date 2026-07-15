@@ -47,7 +47,8 @@ export function autoColor(rgbaMat){
   const ycc2 = new cv.Mat(), rgb2 = new cv.Mat();
   const blur = new cv.Mat();
   // Mats capturados desde los MatVector (cada .get() crea un Mat a liberar).
-  let cr = null, cb = null;
+  // Hoisteados para que el finally pueda liberarlos si un cv.* lanza a mitad.
+  let y0 = null, cr = null, cb = null;
   let out = null;
   try {
     cv.cvtColor(rgbaMat, rgb, cv.COLOR_RGBA2RGB);
@@ -55,24 +56,28 @@ export function autoColor(rgbaMat){
     // Normalización de punto blanco por canal: llevar el brillo del papel (~percentil 95) a 255.
     // Por canal ⇒ hace balance de blancos y neutraliza el tinte de la luz.
     for (let i = 0; i < 3; i++){
-      const c = canales.get(i);
-      const p95 = percentilCanal(c, 0.05);
-      const escala = p95 > 0 ? 255 / p95 : 1;
-      const esc = new cv.Mat();
-      c.convertTo(esc, cv.CV_8U, escala, 0);
-      norm.push_back(esc);
-      esc.delete(); // push_back copió el header (refcount compartido); liberar el nuestro
-      c.delete();
+      let c = null, esc = null;
+      try {
+        c = canales.get(i);
+        const p95 = percentilCanal(c, 0.05);
+        const escala = p95 > 0 ? 255 / p95 : 1;
+        esc = new cv.Mat();
+        c.convertTo(esc, cv.CV_8U, escala, 0);
+        norm.push_back(esc); // push_back copió el header (refcount compartido); liberar el nuestro
+      } finally {
+        if (esc) esc.delete();
+        if (c) c.delete();
+      }
     }
     cv.merge(norm, unido);
     // Contraste conservando color, vía LUT en luminancia (YCrCb).
     cv.cvtColor(unido, ycc, cv.COLOR_RGB2YCrCb);
     cv.split(ycc, chY);
-    const y0 = chY.get(0);
+    y0 = chY.get(0);
     cr = chY.get(1);
     cb = chY.get(2);
     cv.LUT(y0, lutContraste(), y2);
-    y0.delete();
+    y0.delete(); y0 = null; // liberado inline; anular para no hacer doble-free en el finally
     nuevoY.push_back(y2); nuevoY.push_back(cr); nuevoY.push_back(cb);
     cv.merge(nuevoY, ycc2);
     cv.cvtColor(ycc2, rgb2, cv.COLOR_YCrCb2RGB);
@@ -86,6 +91,7 @@ export function autoColor(rgbaMat){
     throw e;
   } finally {
     [rgb, unido, ycc, y2, ycc2, rgb2, blur].forEach(m => m.delete());
+    if (y0) y0.delete();
     if (cr) cr.delete();
     if (cb) cb.delete();
     canales.delete(); norm.delete(); chY.delete(); nuevoY.delete();
