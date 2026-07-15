@@ -35,6 +35,8 @@ window.toast = toast;
 import { iniciarCamara, capturarFrame } from './camera.js';
 import { procesar, aplicarRealce, canvasAJpeg } from './process.js';
 import { get, set } from './settings.js';
+import { extraerDatos } from './gemini.js';
+import { ncfValido, normalizarFecha, buscarDuplicado, montoValido } from './validacion.js';
 
 // Muestra el overlay "Procesando…" antes de ejecutar trabajo síncrono pesado (OpenCV.js
 // es síncrono, no hay await que ceda el hilo). Con doble rAF nos aseguramos de que el
@@ -118,8 +120,129 @@ async function procesarYRevisar(){
   document.getElementById('seg-proc').classList.toggle('on', !!r);
   document.getElementById('seg-orig').classList.toggle('on', !r);
   actualizarUIFiltros();
+  leerDatosDeFactura(); // los datos no dependen del color; no se repite al cambiar de filtro
 }
 window.procesarYRevisar = procesarYRevisar;
+
+// Tarjeta de datos de la factura: OCR con Gemini + campos editables + validación + duplicado (Task 4)
+const CAMPOS_IDS = ['c-fecha', 'c-ncf', 'c-rnc', 'c-comercio', 'c-subtotal', 'c-itbis', 'c-total'];
+
+// Token de generación: descarta lecturas de Gemini obsoletas si el usuario re-procesa
+// (p. ej. ajusta esquinas) mientras una lectura previa sigue en vuelo.
+let genOCR = 0;
+
+function vaciarCampos(){
+  CAMPOS_IDS.forEach(id => { document.getElementById(id).value = ''; });
+  const banner = document.getElementById('dup-banner');
+  banner.hidden = true; banner.textContent = '';
+  document.getElementById('valid-row').innerHTML = '';
+}
+
+function normalizarEnCampos(datos){
+  document.getElementById('c-fecha').value = normalizarFecha(datos.fechaEmision) || datos.fechaEmision || '';
+  document.getElementById('c-ncf').value = datos.ncf || '';
+  document.getElementById('c-rnc').value = datos.rncEmisor || '';
+  document.getElementById('c-comercio').value = datos.nombreComercio || '';
+  document.getElementById('c-subtotal').value = montoValido(datos.subtotal) ? datos.subtotal : '';
+  document.getElementById('c-itbis').value = montoValido(datos.itbis) ? datos.itbis : '';
+  document.getElementById('c-total').value = montoValido(datos.total) ? datos.total : '';
+}
+
+function leerCampos(){
+  const num = v => { const n = parseFloat(String(v).trim().replace(',', '.')); return Number.isFinite(n) ? n : null; };
+  return {
+    fechaEmision: document.getElementById('c-fecha').value.trim(),
+    ncf: document.getElementById('c-ncf').value.trim(),
+    rncEmisor: document.getElementById('c-rnc').value.trim(),
+    nombreComercio: document.getElementById('c-comercio').value.trim(),
+    subtotal: num(document.getElementById('c-subtotal').value),
+    itbis: num(document.getElementById('c-itbis').value),
+    total: num(document.getElementById('c-total').value)
+  };
+}
+
+function okChip(txt){ return `<span class="chip ok"><span class="dot"></span>${txt}</span>`; }
+function warnChip(txt){ return `<span class="chip warn"><span class="dot"></span>${txt}</span>`; }
+
+// Deshabilita los campos Y el botón de confirmar mientras Gemini lee: evita que una edición
+// manual sea pisada por la respuesta tardía del OCR (los inputs deshabilitados no emiten
+// 'change'), y que se suba una factura con los datos aún en null / archivada por fecha de
+// respaldo en vez de la de emisión. Se reactiva al terminar la lectura vigente.
+function setCamposHabilitados(hab){
+  CAMPOS_IDS.forEach(id => { document.getElementById(id).disabled = !hab; });
+  document.getElementById('confirm-btn').disabled = !hab;
+}
+
+async function leerDatosDeFactura(){
+  const miGen = ++genOCR;
+  const key = get('geminiKey', '');
+  const origen = document.getElementById('datos-origen');
+  vaciarCampos();
+  // Reset del estado ANTES del await: si el usuario confirma durante la carga, no se
+  // suben metadatos de una factura anterior (riesgo de cumplimiento fiscal).
+  window.__datos = { origen: 'cargando' };
+  if (!key || !window.__resultado?.canvasFinal){
+    setCamposHabilitados(true);
+    origen.hidden = false;
+    origen.textContent = key ? 'sin imagen' : 'sin OCR (configura Gemini)';
+    window.__datos = { origen: 'manual' };
+    await validarCampos(miGen);
+    return;
+  }
+  origen.hidden = false; origen.textContent = 'Leyendo con Gemini…';
+  setCamposHabilitados(false);
+  try {
+    const datos = await extraerDatos(window.__resultado.canvasFinal, key);
+    if (miGen !== genOCR) return; // llegó una lectura más nueva; ella controla los campos
+    setCamposHabilitados(true);
+    window.__datos = { ...(datos || {}), origen: datos ? 'gemini' : 'manual' };
+    if (datos) normalizarEnCampos(datos);
+    origen.textContent = datos ? 'Gemini' : 'sin lectura';
+  } catch(e){
+    if (miGen !== genOCR) return;
+    setCamposHabilitados(true);
+    console.error(e);
+    toast('No se pudo leer con Gemini: ' + e.message);
+    origen.textContent = 'error de lectura';
+    window.__datos = { origen: 'manual' };
+  }
+  await validarCampos(miGen);
+}
+
+async function validarCampos(gen){
+  const d = leerCampos();
+  window.__datos = { ...window.__datos, ...d };
+  const chips = [];
+  chips.push(ncfValido(d.ncf) ? okChip('NCF válido') : warnChip('NCF a revisar'));
+  chips.push(normalizarFecha(d.fechaEmision) ? okChip('Fecha OK') : warnChip('Fecha a revisar'));
+  // Estado de duplicado coherente con el banner: por defecto null; solo se marca al confirmarlo.
+  window.__datos.duplicadaDe = null;
+  let dupText = '';
+  const fechaISO = normalizarFecha(d.fechaEmision);
+  if (fechaISO && conectado() && get('carpetaRaizId') && d.ncf){
+    try {
+      // Solo lectura: NO crear la carpeta del mes por validar (evita carpetas vacías en Drive).
+      // La creación real ocurre en la subida (Task 5, con asegurarCarpeta).
+      const mesId = await buscarCarpeta(nombreCarpetaMes(fechaISO), get('carpetaRaizId'));
+      if (gen != null && gen !== genOCR) return; // lectura obsoleta; no pisar el DOM/__datos
+      if (mesId){ // si la carpeta del mes aún no existe, no hay duplicados posibles
+        const idx = await leerJSON(mesId, '_gastos.json');
+        if (gen != null && gen !== genOCR) return;
+        const dup = buscarDuplicado(idx, d.ncf);
+        if (dup){
+          dupText = `Factura Duplicada — NCF ya registrado en ${dup.archivo}`;
+          window.__datos.duplicadaDe = dup.archivo;
+        }
+      }
+    } catch(e){ console.error(e); } // no romper la revisión si Drive falla al chequear duplicados
+  }
+  const banner = document.getElementById('dup-banner');
+  banner.hidden = !dupText;
+  banner.textContent = dupText || '';
+  document.getElementById('valid-row').innerHTML = chips.join('');
+}
+
+CAMPOS_IDS.forEach(id => document.getElementById(id).addEventListener('change', () => validarCampos()));
 
 async function reprocesarRealce(){
   const res = window.__resultado;
@@ -339,8 +462,12 @@ inpCarpeta.value = get('carpetaRaiz', 'Gastos_NCF');
 inpClient.addEventListener('change', () => set('clientId', inpClient.value.trim()));
 inpCarpeta.addEventListener('change', () => { set('carpetaRaiz', inpCarpeta.value.trim() || 'Gastos_NCF'); set('carpetaRaizId', null); });
 
+const inpGemini = document.getElementById('inp-gemini');
+inpGemini.value = get('geminiKey', '');
+inpGemini.addEventListener('change', () => set('geminiKey', inpGemini.value.trim()));
+
 // Conexión a Google Drive (Task 9)
-import { initAuth, conectar, conectado, asegurarCarpeta, listarNombres, subirJPEG } from './drive.js';
+import { initAuth, conectar, conectado, asegurarCarpeta, buscarCarpeta, listarNombres, subirJPEG, leerJSON, guardarJSON } from './drive.js';
 
 document.getElementById('btn-conectar').addEventListener('click', async () => {
   const btn = document.getElementById('btn-conectar');
@@ -372,19 +499,37 @@ import { nombreCarpetaMes, siguienteNombre, hoyISO } from './naming.js';
 // Cola offline en IndexedDB con reintento al reconectar (Task 11)
 import { encolar, pendientes, eliminar, cuenta } from './queue.js';
 
-async function subirFactura(blob, fechaISO){
+// Índice _gastos.json por mes (Task 5): archiva por fecha de EMISIÓN (con respaldo a
+// la fecha del dispositivo), registra metadatos y marca duplicados sin bloquear la subida.
+import { agregarEntrada, entradaDeFactura } from './indice.js';
+
+async function subirFactura(blob, datos){
   const raizId = get('carpetaRaizId');
   if (!conectado() || !raizId) throw new Error('sin-conexion');
+  const fechaISO = normalizarFecha(datos.fechaEmision) || hoyISO(); // respaldo: fecha del dispositivo
   const mesId = await asegurarCarpeta(nombreCarpetaMes(fechaISO), raizId);
+  const idx = await leerJSON(mesId, '_gastos.json');
+  // Re-chequeo definitivo contra el índice actual (cubre reintentos de la cola offline,
+  // donde el duplicado pudo registrarse después de que la factura se encoló).
+  const dup = buscarDuplicado(idx, datos.ncf);
   const nombre = siguienteNombre(fechaISO, await listarNombres(mesId));
   await subirJPEG(blob, nombre, mesId);
-  return nombre;
+  // El índice registra la fecha REALMENTE usada para archivar (fechaISO), no el texto crudo:
+  // si el OCR dio una fecha no parseable y se usó el respaldo (hoy), el índice coincide con
+  // la carpeta donde quedó el archivo — trazabilidad fiscal correcta.
+  const entrada = entradaDeFactura(nombre, { ...datos, fechaEmision: fechaISO }, datos.origen || 'manual', !!dup);
+  await guardarJSON(mesId, '_gastos.json', agregarEntrada(idx, entrada));
+  return { nombre, duplicada: !!dup, duplicadaDe: dup ? dup.archivo : null };
 }
 
 document.getElementById('confirm-btn').addEventListener('click', async () => {
   const res = window.__resultado;
   if (!res) return;
   const canvas = res.canvasFinal || res.canvasOriginal;
+  // Se congelan los datos ANTES del await de la subida: si el usuario edita los campos
+  // mientras la factura sube, no queremos que un cambio a mitad de camino contamine
+  // el registro fiscal que se está escribiendo en _gastos.json.
+  const datos = window.__datos || {};
   const btn = document.getElementById('confirm-btn');
   btn.disabled = true; btn.textContent = 'Subiendo…';
   let blob;
@@ -392,21 +537,21 @@ document.getElementById('confirm-btn').addEventListener('click', async () => {
   try {
     blob = await canvasAJpeg(canvas);
     if (colaEnProceso){
-      await encolar({ blob, fechaISO: hoyISO() });
+      await encolar({ blob, datos });
       toast('Subida en curso — factura añadida a la cola');
       actualizarBadge();
       show('camara');
       return;
     }
     colaEnProceso = true; lockAdquirido = true;
-    const nombre = await subirFactura(blob, hoyISO());
-    toast(`Subida: ${nombre} ✓`);
+    const { nombre, duplicada } = await subirFactura(blob, datos);
+    toast(duplicada ? `Subida: ${nombre} — marcada como DUPLICADA (revísala en Gastos)` : `Subida: ${nombre} ✓`);
     show('gastos');
     refrescarGastos();
   } catch(e){
     console.error(e);
     if (e.message === 'sin-conexion'){
-      await encolar({ blob, fechaISO: hoyISO() });
+      await encolar({ blob, datos });
       toast('Sin conexión con Drive — en cola; reconecta en Ajustes para subirla');
       document.getElementById('gastos-sub').textContent = 'Google Drive · reconectar en Ajustes';
       actualizarBadge();
@@ -434,9 +579,11 @@ async function procesarCola(){
   try {
     for (const item of await pendientes()){
       try {
-        const nombre = await subirFactura(item.blob, item.fechaISO);
+        // subirFactura re-chequea duplicado contra el índice _gastos.json vigente en
+        // este momento (no el de cuando se encoló), por eso no se recalcula aquí.
+        const { nombre, duplicada } = await subirFactura(item.blob, item.datos);
         await eliminar(item.id);
-        toast(`Cola: ${nombre} subida ✓`);
+        toast(duplicada ? `Cola: ${nombre} subida — marcada como DUPLICADA` : `Cola: ${nombre} subida ✓`);
       } catch(e){ break; }
     }
   } finally {
@@ -454,7 +601,13 @@ async function refrescarGastos(){
   if (!conectado() || !raizId) return;
   try {
     const mesId = await asegurarCarpeta(carpetaMes, raizId);
-    const nombres = (await listarNombres(mesId)).filter(n => /^Compra_/i.test(n));
+    // El índice es opcional (mes recién creado o _gastos.json aún inexistente); si falla
+    // la lectura, se sigue mostrando la lista sin el marcado de duplicadas.
+    const [nombres, idx] = await Promise.all([
+      listarNombres(mesId).then(ns => ns.filter(n => /^Compra_/i.test(n))),
+      leerJSON(mesId, '_gastos.json').catch(() => null)
+    ]);
+    const duplicadaPorArchivo = new Map((idx?.facturas || []).map(f => [f.archivo, !!f.duplicada]));
     const num = n => { const m = n.match(/^Compra_(\d+)/i); return m ? parseInt(m[1], 10) : -1; };
     nombres.sort((a, b) => num(b) - num(a));
     document.getElementById('mes-meta').textContent = `${nombres.length} facturas este mes`;
@@ -464,7 +617,8 @@ async function refrescarGastos(){
       lista.innerHTML = '<div class="gem-note">Aún no hay facturas este mes.</div>';
     } else {
       nombres.forEach(n => {
-        const inv = document.createElement('div'); inv.className = 'inv';
+        const inv = document.createElement('div');
+        inv.className = duplicadaPorArchivo.get(n) ? 'inv dup' : 'inv';
         const thumb = document.createElement('div'); thumb.className = 'thumb'; thumb.textContent = 'JPG';
         const info = document.createElement('div');
         const nm = document.createElement('div'); nm.className = 'nm num'; nm.textContent = n;

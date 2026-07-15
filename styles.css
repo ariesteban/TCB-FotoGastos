@@ -335,11 +335,27 @@ input[type=range]{width:100%; accent-color:var(--accent); margin-top:8px}
 }
 /* duplicados */
 .dup-banner{
-  display:none; background:rgba(224,101,87,.12); border:1px solid rgba(224,101,87,.55);
+  display:block; background:rgba(224,101,87,.12); border:1px solid rgba(224,101,87,.55);
   border-radius:12px; padding:11px 13px; font-size:12.5px; color:#F2B6AC; line-height:1.55;
+  font-weight:650; margin-bottom:10px;
 }
-.dup-banner.show{display:block}
+.dup-banner[hidden]{display:none}
 .dup-banner b{color:#F1877A}
+
+/* tarjeta de datos de la factura (Revisión) */
+.datos-head{display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px}
+.campos{display:grid; grid-template-columns:1fr 1fr; gap:9px}
+.campo{display:flex; flex-direction:column; gap:5px;
+  font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); font-weight:650}
+.campo-wide{grid-column:1/-1}
+.campo input{
+  font-family:inherit; font-size:14.5px; font-weight:600; letter-spacing:0; text-transform:none;
+  color:var(--silver); background:var(--glass); border:1px solid var(--line-soft); border-radius:11px;
+  padding:9px 11px; width:100%;
+}
+.campo input::placeholder{color:var(--faint); font-weight:500}
+.campo input:focus-visible{outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent)}
+.datos .valid-row{margin-top:11px}
 .inv.dup{
   background:rgba(224,101,87,.09); border:1px solid rgba(224,101,87,.45);
   border-radius:11px; padding:10px 8px; margin:4px 0;
@@ -459,6 +475,8 @@ html[data-theme="light"] .set-row .t{color:#16202B}
 html[data-theme="light"] .toggle{background:#D3D7DE}
 html[data-theme="light"] .toggle.on{background:var(--ok)}
 html[data-theme="light"] .keyfield{background:#F2F3F5; color:#5D636E; border-color:#D5DAE2}
+html[data-theme="light"] .campo input{background:#FFFFFF; color:#16202B; border-color:#D5DAE2}
+html[data-theme="light"] .campo input::placeholder{color:#9AA0A8}
 html[data-theme="light"] .toast{background:#FFFFFF; border-color:#D5DAE2; color:#16202B; box-shadow:0 10px 30px rgba(40,60,90,.25)}
 html[data-theme="light"] .cmp{background:#E9EDF3; border-color:#D5DAE2}
 html[data-theme="light"] .cmp .layerB{background:#E9EDF3}

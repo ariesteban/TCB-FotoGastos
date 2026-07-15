@@ -60,6 +60,23 @@
             <canvas id="rev-esquinas" style="position:absolute; inset:0; width:100%; height:100%; display:none; touch-action:none"></canvas>
           </div>
         </div>
+        <div class="card datos" id="datos-card">
+          <div class="datos-head">
+            <span class="eyebrow">Datos de la factura</span>
+            <span class="chip" id="datos-origen" hidden></span>
+          </div>
+          <div class="dup-banner" id="dup-banner" hidden></div>
+          <div class="campos">
+            <label class="campo campo-wide"><span>Fecha de emisión</span><input id="c-fecha" type="text" inputmode="numeric" placeholder="AAAA-MM-DD"></label>
+            <label class="campo campo-wide"><span>NCF</span><input id="c-ncf" type="text" placeholder="B0100000000"></label>
+            <label class="campo"><span>RNC emisor</span><input id="c-rnc" type="text" inputmode="numeric"></label>
+            <label class="campo"><span>Comercio</span><input id="c-comercio" type="text"></label>
+            <label class="campo"><span>Subtotal</span><input id="c-subtotal" type="text" inputmode="decimal"></label>
+            <label class="campo"><span>ITBIS</span><input id="c-itbis" type="text" inputmode="decimal"></label>
+            <label class="campo campo-wide"><span>Total</span><input id="c-total" type="text" inputmode="decimal"></label>
+          </div>
+          <div class="valid-row" id="valid-row"></div>
+        </div>
         <button class="btn btn-ghost btn-sm" id="btn-esquinas" style="width:100%">Ajustar esquinas manualmente</button>
         <button class="btn btn-primary" id="confirm-btn">Confirmar y subir</button>
       </div>
@@ -109,6 +126,12 @@
           <input class="keyfield" id="inp-carpeta" placeholder="Gastos_NCF">
           <button class="btn btn-primary" id="btn-conectar" style="margin-top:12px">Conectar Google Drive</button>
           <div class="gem-note" id="drive-estado" style="margin-top:8px">No conectado.</div>
+        </div>
+        <div class="card">
+          <div class="eyebrow" style="margin-bottom:4px">Gemini — lectura de datos (OCR)</div>
+          <label class="eyebrow" for="inp-gemini" style="display:block; margin-top:8px">API key de Google AI Studio</label>
+          <input class="keyfield" id="inp-gemini" placeholder="AIza…">
+          <div class="gem-note" style="margin-top:8px">Con la llave, la app lee automáticamente fecha, NCF, RNC, ITBIS y total de cada factura. Las imágenes se envían a Google al leerlas. El nivel gratuito de AI Studio cubre el volumen típico.</div>
         </div>
         <div style="text-align:center; padding:4px 0 2px">
           <span class="tcb-logo" style="width:72px;height:26px" role="img" aria-label="TCB"></span>
