@@ -164,10 +164,13 @@ function leerCampos(){
 function okChip(txt){ return `<span class="chip ok"><span class="dot"></span>${txt}</span>`; }
 function warnChip(txt){ return `<span class="chip warn"><span class="dot"></span>${txt}</span>`; }
 
-// Deshabilita los campos mientras Gemini lee, para que una edición manual no pueda ser
-// pisada por la respuesta tardía del OCR (los inputs deshabilitados no emiten 'change').
+// Deshabilita los campos Y el botón de confirmar mientras Gemini lee: evita que una edición
+// manual sea pisada por la respuesta tardía del OCR (los inputs deshabilitados no emiten
+// 'change'), y que se suba una factura con los datos aún en null / archivada por fecha de
+// respaldo en vez de la de emisión. Se reactiva al terminar la lectura vigente.
 function setCamposHabilitados(hab){
   CAMPOS_IDS.forEach(id => { document.getElementById(id).disabled = !hab; });
+  document.getElementById('confirm-btn').disabled = !hab;
 }
 
 async function leerDatosDeFactura(){
