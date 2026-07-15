@@ -35,6 +35,8 @@ window.toast = toast;
 import { iniciarCamara, capturarFrame } from './camera.js';
 import { procesar, aplicarRealce, canvasAJpeg } from './process.js';
 import { get, set } from './settings.js';
+import { extraerDatos } from './gemini.js';
+import { ncfValido, normalizarFecha, buscarDuplicado, montoValido } from './validacion.js';
 
 // Muestra el overlay "Procesando…" antes de ejecutar trabajo síncrono pesado (OpenCV.js
 // es síncrono, no hay await que ceda el hilo). Con doble rAF nos aseguramos de que el
@@ -118,8 +120,100 @@ async function procesarYRevisar(){
   document.getElementById('seg-proc').classList.toggle('on', !!r);
   document.getElementById('seg-orig').classList.toggle('on', !r);
   actualizarUIFiltros();
+  leerDatosDeFactura(); // los datos no dependen del color; no se repite al cambiar de filtro
 }
 window.procesarYRevisar = procesarYRevisar;
+
+// Tarjeta de datos de la factura: OCR con Gemini + campos editables + validación + duplicado (Task 4)
+const CAMPOS_IDS = ['c-fecha', 'c-ncf', 'c-rnc', 'c-comercio', 'c-subtotal', 'c-itbis', 'c-total'];
+
+function vaciarCampos(){
+  CAMPOS_IDS.forEach(id => { document.getElementById(id).value = ''; });
+  const banner = document.getElementById('dup-banner');
+  banner.hidden = true; banner.textContent = '';
+  document.getElementById('valid-row').innerHTML = '';
+}
+
+function normalizarEnCampos(datos){
+  document.getElementById('c-fecha').value = normalizarFecha(datos.fechaEmision) || datos.fechaEmision || '';
+  document.getElementById('c-ncf').value = datos.ncf || '';
+  document.getElementById('c-rnc').value = datos.rncEmisor || '';
+  document.getElementById('c-comercio').value = datos.nombreComercio || '';
+  document.getElementById('c-subtotal').value = montoValido(datos.subtotal) ? datos.subtotal : '';
+  document.getElementById('c-itbis').value = montoValido(datos.itbis) ? datos.itbis : '';
+  document.getElementById('c-total').value = montoValido(datos.total) ? datos.total : '';
+}
+
+function leerCampos(){
+  const num = v => { const n = parseFloat(String(v).trim().replace(',', '.')); return Number.isFinite(n) ? n : null; };
+  return {
+    fechaEmision: document.getElementById('c-fecha').value.trim(),
+    ncf: document.getElementById('c-ncf').value.trim(),
+    rncEmisor: document.getElementById('c-rnc').value.trim(),
+    nombreComercio: document.getElementById('c-comercio').value.trim(),
+    subtotal: num(document.getElementById('c-subtotal').value),
+    itbis: num(document.getElementById('c-itbis').value),
+    total: num(document.getElementById('c-total').value)
+  };
+}
+
+function okChip(txt){ return `<span class="chip ok"><span class="dot"></span>${txt}</span>`; }
+function warnChip(txt){ return `<span class="chip warn"><span class="dot"></span>${txt}</span>`; }
+
+async function leerDatosDeFactura(){
+  const key = get('geminiKey', '');
+  const origen = document.getElementById('datos-origen');
+  vaciarCampos();
+  if (!key || !window.__resultado?.canvasFinal){
+    origen.hidden = false;
+    origen.textContent = key ? 'sin imagen' : 'sin OCR (configura Gemini)';
+    window.__datos = { origen: 'manual' };
+    await validarCampos();
+    return;
+  }
+  origen.hidden = false; origen.textContent = 'Leyendo con Gemini…';
+  try {
+    const datos = await extraerDatos(window.__resultado.canvasFinal, key);
+    window.__datos = { ...(datos || {}), origen: datos ? 'gemini' : 'manual' };
+    if (datos) normalizarEnCampos(datos);
+    origen.textContent = datos ? 'Gemini' : 'sin lectura';
+  } catch(e){
+    console.error(e);
+    toast('No se pudo leer con Gemini: ' + e.message);
+    origen.textContent = 'error de lectura';
+    window.__datos = { origen: 'manual' };
+  }
+  await validarCampos();
+}
+
+async function validarCampos(){
+  const d = leerCampos();
+  window.__datos = { ...window.__datos, ...d };
+  const chips = [];
+  chips.push(ncfValido(d.ncf) ? okChip('NCF válido') : warnChip('NCF a revisar'));
+  chips.push(normalizarFecha(d.fechaEmision) ? okChip('Fecha OK') : warnChip('Fecha a revisar'));
+  let dupText = '';
+  const fechaISO = normalizarFecha(d.fechaEmision);
+  if (fechaISO && conectado() && get('carpetaRaizId') && d.ncf){
+    try {
+      const mesId = await asegurarCarpeta(nombreCarpetaMes(fechaISO), get('carpetaRaizId'));
+      const idx = await leerJSON(mesId, '_gastos.json');
+      const dup = buscarDuplicado(idx, d.ncf);
+      if (dup){
+        dupText = `Factura Duplicada — NCF ya registrado en ${dup.archivo}`;
+        window.__datos.duplicadaDe = dup.archivo;
+      } else {
+        window.__datos.duplicadaDe = null;
+      }
+    } catch(e){ console.error(e); } // no romper la revisión si Drive falla al chequear duplicados
+  }
+  const banner = document.getElementById('dup-banner');
+  banner.hidden = !dupText;
+  banner.textContent = dupText || '';
+  document.getElementById('valid-row').innerHTML = chips.join('');
+}
+
+CAMPOS_IDS.forEach(id => document.getElementById(id).addEventListener('change', validarCampos));
 
 async function reprocesarRealce(){
   const res = window.__resultado;
@@ -340,7 +434,7 @@ inpClient.addEventListener('change', () => set('clientId', inpClient.value.trim(
 inpCarpeta.addEventListener('change', () => { set('carpetaRaiz', inpCarpeta.value.trim() || 'Gastos_NCF'); set('carpetaRaizId', null); });
 
 // Conexión a Google Drive (Task 9)
-import { initAuth, conectar, conectado, asegurarCarpeta, listarNombres, subirJPEG } from './drive.js';
+import { initAuth, conectar, conectado, asegurarCarpeta, listarNombres, subirJPEG, leerJSON } from './drive.js';
 
 document.getElementById('btn-conectar').addEventListener('click', async () => {
   const btn = document.getElementById('btn-conectar');

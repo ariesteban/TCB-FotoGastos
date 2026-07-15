@@ -60,6 +60,23 @@
             <canvas id="rev-esquinas" style="position:absolute; inset:0; width:100%; height:100%; display:none; touch-action:none"></canvas>
           </div>
         </div>
+        <div class="card datos" id="datos-card">
+          <div class="datos-head">
+            <span class="eyebrow">Datos de la factura</span>
+            <span class="chip" id="datos-origen" hidden></span>
+          </div>
+          <div class="dup-banner" id="dup-banner" hidden></div>
+          <div class="campos">
+            <label class="campo campo-wide"><span>Fecha de emisión</span><input id="c-fecha" type="text" inputmode="numeric" placeholder="AAAA-MM-DD"></label>
+            <label class="campo campo-wide"><span>NCF</span><input id="c-ncf" type="text" placeholder="B0100000000"></label>
+            <label class="campo"><span>RNC emisor</span><input id="c-rnc" type="text" inputmode="numeric"></label>
+            <label class="campo"><span>Comercio</span><input id="c-comercio" type="text"></label>
+            <label class="campo"><span>Subtotal</span><input id="c-subtotal" type="text" inputmode="decimal"></label>
+            <label class="campo"><span>ITBIS</span><input id="c-itbis" type="text" inputmode="decimal"></label>
+            <label class="campo campo-wide"><span>Total</span><input id="c-total" type="text" inputmode="decimal"></label>
+          </div>
+          <div class="valid-row" id="valid-row"></div>
+        </div>
         <button class="btn btn-ghost btn-sm" id="btn-esquinas" style="width:100%">Ajustar esquinas manualmente</button>
         <button class="btn btn-primary" id="confirm-btn">Confirmar y subir</button>
       </div>
