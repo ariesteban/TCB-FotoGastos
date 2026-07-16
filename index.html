@@ -156,6 +156,17 @@
     </section>
   </div>
 
+  <div class="revisar-panel" id="cola-panel" hidden>
+    <div class="revisar-card">
+      <div class="revisar-head">
+        <b>Cola de subida</b>
+        <button class="revisar-x" id="cola-cerrar" aria-label="Cerrar">✕</button>
+      </div>
+      <div id="cola-lista"></div>
+      <button class="btn btn-primary btn-sm" id="cola-subir" style="width:100%; margin-top:12px">Subir ahora</button>
+    </div>
+  </div>
+
   <div class="revisar-panel" id="revisar-panel" hidden>
     <div class="revisar-card">
       <div class="revisar-head">
@@ -174,6 +185,7 @@
         <label class="campo campo-wide"><span>Total</span><input id="rv-total" type="text" inputmode="decimal"></label>
       </div>
       <div style="display:flex; gap:8px; margin-top:12px">
+        <button class="btn btn-ghost btn-sm" id="rv-leer" style="flex:1">Leer con IA</button>
         <button class="btn btn-ghost btn-sm" id="rv-ver-imagen" style="flex:1">Ver imagen</button>
         <button class="btn btn-primary btn-sm" id="rv-confirmar" style="flex:1">Confirmar</button>
       </div>

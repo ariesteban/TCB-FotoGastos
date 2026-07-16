@@ -89,13 +89,15 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-document.getElementById('shutter').addEventListener('click', () => {
+document.getElementById('shutter').addEventListener('click', async () => {
   if (disparando) return;
   if (!video.videoWidth) return toast('La cámara no está lista');
   const canvas = capturarFrame(video);
-  window.__captura = { canvas, esquinas: ultimasEsquinas };
   const fx = document.getElementById('flashfx');
   fx.classList.remove('go'); void fx.offsetWidth; fx.classList.add('go');
+  // Sin deteccion en vivo: reintenta sobre el still (con rescate) y luego con la IA local.
+  let esquinas = ultimasEsquinas || detectarDocumento(canvas, 1200) || await detectarConIAConOverlay(canvas);
+  window.__captura = { canvas, esquinas };
   procesarYRevisar();
 });
 
@@ -364,7 +366,16 @@ document.getElementById('seg-orig').addEventListener('click', () => {
 // Editor de esquinas a pantalla completa (Fase 2D): abre el overlay con lupa y
 // re-procesa si el usuario aplica el recorte.
 import { abrirEditorEsquinas, initEditorEsquinas } from './esquinas.js';
+import { detectarConIA } from './detectia.js';
 initEditorEsquinas();
+
+// La IA tarda 2-4 s por imagen: overlay visible para que no parezca colgado.
+async function detectarConIAConOverlay(canvas){
+  const ov = document.getElementById('overlay-proc');
+  ov.hidden = false;
+  try { return await detectarConIA(canvas); }
+  finally { ov.hidden = true; }
+}
 
 async function ajustarEsquinas(){
   const res = window.__resultado;
@@ -380,7 +391,7 @@ const visorRecortar = document.getElementById('visor-recortar');
 visorRecortar.addEventListener('click', () => { cerrarVisor(); ajustarEsquinas(); });
 
 import { cvReady } from './cvready.js';
-import { detectarDocumento, esEstable, nitidezRegion } from './detect.js';
+import { detectarDocumento, esEstable, nitidezRegion, tocaBorde } from './detect.js';
 import { archivoACanvas } from './importar.js';
 
 // ---------- Importación en lote (Fase 2B) ----------
@@ -409,12 +420,11 @@ async function cargarSiguienteDelLote(){
   actualizarBarraLote();
   try {
     const canvas = await archivoACanvas(lote.files[lote.i]);
-    // Importacion: no es tiempo real, se trabaja a mayor resolucion para acertar mas.
+    // Autorecorte: clasico (rapido) → IA local si fallo. El editor abre SIEMPRE con lo
+    // detectado precargado; "Aplicar" acepta el recorte y se pasa a los datos (Adobe Scan).
     let esquinas = detectarDocumento(canvas, 1200);
-    if (!esquinas){
-      // Comportamiento Adobe Scan: si no hay deteccion, se muestran las esquinas para confirmar.
-      esquinas = await abrirEditorEsquinas(canvas, null);
-    }
+    if (!esquinas) esquinas = await detectarConIAConOverlay(canvas);
+    esquinas = await abrirEditorEsquinas(canvas, esquinas);
     window.__captura = { canvas, esquinas };
     procesarYRevisar();
   } catch(e){
@@ -493,7 +503,10 @@ async function buclDeteccion(){
     if (video.videoWidth && document.getElementById('scr-camara').classList.contains('active') && !disparando){
       frame.width = video.videoWidth; frame.height = video.videoHeight;
       frame.getContext('2d').drawImage(video, 0, 0);
-      const esquinas = detectarDocumento(frame);
+      // En vivo: criterio estricto (sin rescate) y sin cuadrilateros pegados al borde,
+      // para no marcar "Documento detectado" sobre fondos texturados (falsos positivos).
+      let esquinas = detectarDocumento(frame, 700, { rescate: false });
+      if (esquinas && tocaBorde(esquinas, frame.width, frame.height)) esquinas = null;
       dibujarOverlay(esquinas);
       const shutter = document.getElementById('shutter');
 
@@ -553,7 +566,22 @@ modeloEl.addEventListener('click', (ev) => {
 
 // Conexión a Google Drive (Task 9)
 import { initAuth, conectar, conectado, asegurarCarpeta, buscarCarpeta, listarNombres, subirJPEG, leerJSON, guardarJSON, descargarImagen,
-         buscarArchivo, moverYRenombrar, nombreDe } from './drive.js';
+         buscarArchivo, moverYRenombrar, nombreDe, alDesconectar } from './drive.js';
+
+// Pasos comunes tras conectar (boton de Ajustes, aviso tocable o reconexion silenciosa).
+async function postConexion(){
+  const raizId = await asegurarCarpeta(get('carpetaRaiz', 'Gastos_NCF'));
+  set('carpetaRaizId', raizId);
+  set('driveConectadoAntes', true); // habilita la reconexion silenciosa al abrir
+  document.getElementById('drive-estado').textContent =
+    `Conectado ✓ — carpeta «${get('carpetaRaiz', 'Gastos_NCF')}» lista`;
+  const sub = document.getElementById('gastos-sub');
+  sub.textContent = 'Google Drive · conectado';
+  sub.classList.remove('accion');
+  refrescarGastos();
+  procesarCola();
+  revisarPendientes(); // re-lee con Gemini las facturas pendientes al conectar
+}
 
 document.getElementById('btn-conectar').addEventListener('click', async () => {
   const btn = document.getElementById('btn-conectar');
@@ -563,15 +591,8 @@ document.getElementById('btn-conectar').addEventListener('click', async () => {
   try {
     initAuth(clientId);
     await conectar();
-    const raizId = await asegurarCarpeta(get('carpetaRaiz', 'Gastos_NCF'));
-    set('carpetaRaizId', raizId);
-    document.getElementById('drive-estado').textContent =
-      `Conectado ✓ — carpeta «${get('carpetaRaiz', 'Gastos_NCF')}» lista`;
-    document.getElementById('gastos-sub').textContent = 'Google Drive · conectado';
+    await postConexion();
     toast('Google Drive conectado');
-    refrescarGastos();
-    procesarCola();
-    revisarPendientes(); // re-lee con Gemini las facturas pendientes al conectar
   } catch(e){
     console.error(e);
     toast('No se pudo conectar: ' + e.message);
@@ -579,6 +600,45 @@ document.getElementById('btn-conectar').addEventListener('click', async () => {
     btn.disabled = false;
   }
 });
+
+function mostrarAvisoReconectar(){
+  const sub = document.getElementById('gastos-sub');
+  sub.textContent = 'Reconectar Google Drive ▸';
+  sub.classList.add('accion');
+}
+alDesconectar(mostrarAvisoReconectar);
+
+// El subtitulo de Gastos es tocable cuando hay que reconectar (sin pasar por Ajustes).
+document.getElementById('gastos-sub').addEventListener('click', async () => {
+  if (conectado()) return;
+  const clientId = get('clientId', '');
+  if (!clientId) return toast('Pega tu Client ID de Google en Ajustes');
+  try {
+    initAuth(clientId);
+    await conectar();
+    await postConexion();
+    toast('Google Drive conectado');
+  } catch(e){ console.error(e); toast('No se pudo conectar: ' + e.message); }
+});
+
+// Al abrir la app: si ya hubo consentimiento antes, renovar el acceso sin molestar.
+// Google lo permite con prompt:'' mientras la sesion siga viva; si exige interaccion
+// (o el popup se bloquea), queda el aviso tocable en Gastos.
+async function reconectarSilencioso(){
+  const clientId = get('clientId', '');
+  if (!clientId || !get('driveConectadoAntes', false) || conectado()) return;
+  if (!window.google){ mostrarAvisoReconectar(); return; } // GIS aun no cargo
+  try {
+    initAuth(clientId);
+    await conectar({ silencioso: true });
+    await postConexion();
+    toast('Google Drive reconectado ✓');
+  } catch(e){
+    console.warn('Reconexion silenciosa fallo:', e.message);
+    mostrarAvisoReconectar();
+  }
+}
+window.addEventListener('load', () => setTimeout(reconectarSilencioso, 600));
 
 // Confirmar y subir + pantalla Gastos (Task 10)
 import { nombreCarpetaMes, siguienteNombre, hoyISO,
@@ -590,6 +650,27 @@ import { encolar, pendientes, eliminar, cuenta } from './queue.js';
 // Índice _gastos.json por mes (Task 5): archiva por fecha de EMISIÓN (con respaldo a
 // la fecha del dispositivo), registra metadatos y marca duplicados sin bloquear la subida.
 import { agregarEntrada, entradaDeFactura, quitarEntrada } from './indice.js';
+
+// Archivos que el revisor esta leyendo AHORA (para el chip "Leyendo con IA…" en Gastos
+// y para rellenar el panel abierto al terminar).
+const archivosEnLectura = new Set();
+
+function refrescarGastosSiVisible(){
+  if (document.getElementById('scr-gastos').classList.contains('active')) refrescarGastos();
+}
+
+function alTerminarLectura(archivoAnterior, res){
+  archivosEnLectura.delete(archivoAnterior);
+  refrescarGastosSiVisible();
+  if (!res) return;
+  // Si el usuario tiene abierto el panel de ESTA factura (aunque se haya renombrado),
+  // se rellena ante sus ojos; la confirmacion sigue siendo suya.
+  if (rvArchivo && (rvArchivo === archivoAnterior || rvArchivo === res.nombreFinal)){
+    rvArchivo = res.nombreFinal;
+    rellenarPanel(res.entrada);
+    toast('Datos leídos — revisa y confirma');
+  }
+}
 
 // Mutex que serializa TODAS las escrituras a _gastos.json (subida, revisor con Gemini y
 // confirmación del usuario): cada una hace su read-modify-write sin que otra la pise
@@ -647,7 +728,7 @@ function actualizarEntradaConReArchivo(mesId, archivo, mutador){
     const carpetaActual = await nombreDe(mesId);
     if (!fechaISO || !necesitaReArchivo(archivo, carpetaActual, fechaISO)){
       await guardarJSON(mesId, '_gastos.json', idx);
-      return { nombreFinal: archivo, estado: f.estado, movidaA: null };
+      return { nombreFinal: archivo, estado: f.estado, movidaA: null, entrada: f };
     }
     const carpetaDestino = nombreCarpetaMes(fechaISO);
     const destinoId = carpetaDestino === carpetaActual ? mesId
@@ -667,7 +748,7 @@ function actualizarEntradaConReArchivo(mesId, archivo, mutador){
       await guardarJSON(destinoId, '_gastos.json', agregarEntrada(idxDest, entradaFinal));
       await guardarJSON(mesId, '_gastos.json', quitarEntrada(idx, archivo));
     }
-    return { nombreFinal, estado: entradaFinal.estado, movidaA: destinoId === mesId ? null : carpetaDestino };
+    return { nombreFinal, estado: entradaFinal.estado, movidaA: destinoId === mesId ? null : carpetaDestino, entrada: entradaFinal };
   });
 }
 
@@ -700,6 +781,7 @@ document.getElementById('confirm-btn').addEventListener('click', async () => {
     toast(duplicada ? `Subida: ${nombre} — marcada como DUPLICADA (revísala en Gastos)`
         : esProvisional(nombre) ? 'Subida ✓ — la IA leerá los datos y la renombrará'
         : `Subida: ${nombre} ✓`);
+    revisarPendientes(); // el revisor arranca de una vez, sin esperar a que abras Gastos
     avanzarLoteOIr('gastos');
   } catch(e){
     console.error(e);
@@ -716,6 +798,58 @@ document.getElementById('confirm-btn').addEventListener('click', async () => {
     if (lockAdquirido) colaEnProceso = false;
     btn.disabled = false; btn.textContent = 'Confirmar y subir';
   }
+});
+
+// Panel de cola de subida (Fase 2E): ver, reintentar y eliminar lo que espera Drive.
+let colaURLs = [];
+async function abrirCola(){
+  const lista = document.getElementById('cola-lista');
+  colaURLs.forEach(u => URL.revokeObjectURL(u)); colaURLs = [];
+  lista.innerHTML = '';
+  const items = await pendientes();
+  document.getElementById('cola-subir').disabled = !items.length;
+  if (!items.length){
+    lista.innerHTML = '<div class="gem-note">Nada en cola — todo está en Drive.</div>';
+  }
+  for (const it of items){
+    const fila = document.createElement('div');
+    fila.className = 'cola-item';
+    const img = document.createElement('img');
+    const u = URL.createObjectURL(it.blob); colaURLs.push(u);
+    img.src = u; img.alt = 'Miniatura';
+    const d = it.datos || {};
+    const partes = [d.nombreComercio, normalizarFecha(d.fechaEmision),
+      d.total != null ? 'RD$ ' + Number(d.total).toLocaleString('es-DO', { minimumFractionDigits: 2 }) : null];
+    const info = document.createElement('div');
+    info.className = 'cola-info';
+    info.innerHTML = '<b class="num"></b><span>Esperando conexión con Drive</span>';
+    info.querySelector('b').textContent = partes.filter(Boolean).join(' · ') || 'Sin datos leídos';
+    const del = document.createElement('button');
+    del.className = 'cola-borrar'; del.textContent = '🗑';
+    del.setAttribute('aria-label', 'Eliminar de la cola');
+    del.addEventListener('click', async () => {
+      if (!confirm('¿Eliminar esta factura de la cola? La foto se descartará (aún no está en Drive).')) return;
+      await eliminar(it.id);
+      actualizarBadge();
+      abrirCola(); // re-render
+    });
+    fila.appendChild(img); fila.appendChild(info); fila.appendChild(del);
+    lista.appendChild(fila);
+  }
+  document.getElementById('cola-panel').hidden = false;
+}
+function cerrarCola(){
+  document.getElementById('cola-panel').hidden = true;
+  colaURLs.forEach(u => URL.revokeObjectURL(u)); colaURLs = [];
+}
+document.getElementById('btn-cola').addEventListener('click', abrirCola);
+document.getElementById('cola-cerrar').addEventListener('click', cerrarCola);
+document.getElementById('cola-subir').addEventListener('click', async () => {
+  if (!conectado()) return toast('Sin conexión con Drive — usa "Reconectar" en Gastos');
+  cerrarCola();
+  await procesarCola();
+  refrescarGastosSiVisible();
+  toast('Cola procesada');
 });
 
 async function actualizarBadge(){
@@ -742,6 +876,7 @@ async function procesarCola(){
   } finally {
     colaEnProceso = false;
     actualizarBadge();
+    revisarPendientes(); // lo recien subido de la cola puede haber quedado por revisar
   }
 }
 window.addEventListener('online', procesarCola);
@@ -768,13 +903,20 @@ async function revisarPendientes(){
         if (intentos < 3) await encolarRevision({ blob: item.blob, mesId: item.mesId, archivo: item.archivo, intentos });
         continue;
       }
+      archivosEnLectura.add(item.archivo); // chip "Leyendo con IA…" en Gastos
+      refrescarGastosSiVisible();
       let datos = null;
       try { datos = await extraerDatos(canvas, key, geminiModelo); }
-      catch(e){ console.error(e); break; } // error de red/HTTP con Gemini: reintentar todo luego
+      catch(e){ // error de red/HTTP con Gemini: reintentar todo luego
+        archivosEnLectura.delete(item.archivo);
+        refrescarGastosSiVisible();
+        console.error(e);
+        break;
+      }
       try {
         // read-modify-write atómico contra el índice VIGENTE en Drive; si Gemini fijó la
         // fecha, el helper renombra/mueve el archivo (Pendiente_… → Compra_DDN en su mes).
-        await actualizarEntradaConReArchivo(item.mesId, item.archivo, f => {
+        const res = await actualizarEntradaConReArchivo(item.mesId, item.archivo, f => {
           if (datos){
             for (const c of ['fechaEmision', 'ncf', 'rncEmisor', 'nombreComercio', 'subtotal', 'itbis', 'total']){
               if (datos[c] != null && datos[c] !== '') f[c] = datos[c];
@@ -784,7 +926,12 @@ async function revisarPendientes(){
           f.estado = facturaCompleta(f) ? 'pendiente' : 'incompleta'; // el usuario confirma después
         });
         await eliminarRevision(item.id);
-      } catch(e){ console.error(e); break; } // fallo de Drive: reintentar en la próxima corrida
+        alTerminarLectura(item.archivo, res);
+      } catch(e){
+        archivosEnLectura.delete(item.archivo);
+        console.error(e);
+        break; // fallo de Drive: reintentar en la próxima corrida
+      }
     }
   } finally {
     revisando = false;
@@ -839,7 +986,13 @@ async function refrescarGastos(){
           amt.appendChild(b);
         }
         const est = e && CHIP_ESTADO[e.estado];
-        if (est){
+        if (archivosEnLectura.has(n)){
+          const chip = document.createElement('span');
+          chip.className = 'chip info leyendo';
+          chip.style.cssText = 'margin-top:4px; font-size:10px; padding:2px 8px';
+          chip.innerHTML = '<span class="dot"></span>Leyendo con IA…';
+          amt.appendChild(chip);
+        } else if (est){
           const chip = document.createElement('span');
           chip.className = 'chip ' + est[0];
           chip.style.cssText = 'margin-top:4px; font-size:10px; padding:2px 8px';
@@ -891,15 +1044,20 @@ document.getElementById('rv-thumb').addEventListener('click', () => {
   document.getElementById('visor').hidden = false;
 });
 
+function rellenarPanel(f){
+  document.getElementById('revisar-titulo').textContent = `Revisar ${f.archivo}`;
+  for (const [id, campo] of Object.entries(RV_CAMPOS)){
+    document.getElementById(id).value = f[campo] != null ? f[campo] : '';
+  }
+}
+
 function abrirRevisar(archivo){
   const idx = window.__gastosMes?.idx;
   const f = idx?.facturas?.find(x => x.archivo === archivo);
   if (!f) return;
   rvArchivo = archivo;
-  document.getElementById('revisar-titulo').textContent = `Revisar ${archivo}`;
-  for (const [id, campo] of Object.entries(RV_CAMPOS)){
-    document.getElementById(id).value = f[campo] != null ? f[campo] : '';
-  }
+  rellenarPanel(f);
+  document.getElementById('rv-leer').hidden = f.estado === 'completa';
   document.getElementById('revisar-panel').hidden = false;
   cargarMiniatura(window.__gastosMes.mesId, archivo);
 }
@@ -956,6 +1114,52 @@ async function verImagenRevision(){
     document.getElementById('visor').hidden = false;
   } catch(e){ console.error(e); toast('No se pudo cargar la imagen'); }
 }
+
+// Reintento manual (idea de Ari): lee ESTA factura al momento — Gemini si hay key y
+// conexion, OCR local si no — y deja el resultado 'pendiente' para que el usuario valide.
+async function leerConIAAhora(){
+  const ctx = window.__gastosMes;
+  if (!ctx || !rvArchivo) return;
+  const archivo = rvArchivo;
+  const btn = document.getElementById('rv-leer');
+  btn.disabled = true; btn.textContent = 'Leyendo…';
+  try {
+    const item = (await pendientesRevision()).find(x => x.archivo === archivo);
+    let blob = item ? item.blob : thumbCache.get(archivo);
+    if (!blob){
+      blob = await descargarImagen(ctx.mesId, archivo);
+      if (blob) thumbCache.set(archivo, blob);
+    }
+    if (!blob) return toast('No se encontró la imagen de la factura');
+    const canvas = await archivoACanvas(blob);
+    const key = get('geminiKey', '');
+    let datos = null, motor = null;
+    if (key){
+      try { datos = await extraerDatos(canvas, key, geminiModelo); motor = 'gemini'; }
+      catch(e){ console.error(e); }
+    }
+    if (!datos){
+      try { datos = await extraerDatosLocal(canvas); motor = 'local'; }
+      catch(e){ console.error(e); }
+    }
+    if (!datos) return toast('Sin conexión y sin OCR disponible — intenta luego');
+    const res = await actualizarEntradaConReArchivo(ctx.mesId, archivo, f => {
+      for (const c of ['fechaEmision', 'ncf', 'rncEmisor', 'nombreComercio', 'subtotal', 'itbis', 'total']){
+        if (datos[c] != null && datos[c] !== '') f[c] = datos[c];
+      }
+      if (motor === 'gemini') f.revisadaIA = true;
+      f.estado = facturaCompleta(f) ? 'pendiente' : 'incompleta';
+    });
+    if (!res) return toast('La factura ya no está en el índice');
+    if (item) await eliminarRevision(item.id); // ya leida: fuera de la cola de revision
+    rvArchivo = res.nombreFinal;
+    rellenarPanel(res.entrada);
+    refrescarGastos();
+    toast('Datos leídos — revisa y confirma');
+  } catch(e){ console.error(e); toast('No se pudo leer: ' + e.message); }
+  finally { btn.disabled = false; btn.textContent = 'Leer con IA'; }
+}
+document.getElementById('rv-leer').addEventListener('click', leerConIAAhora);
 
 document.getElementById('revisar-cerrar').addEventListener('click', cerrarRevisar);
 document.getElementById('rv-confirmar').addEventListener('click', confirmarRevision);
