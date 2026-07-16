@@ -3,4 +3,4 @@
 // la seguridad la dan los ORIGENES AUTORIZADOS configurados en Google Cloud Console.
 // Con esto el usuario no pega nada en Ajustes: solo toca "Conectar Google Drive".
 // El campo de Ajustes sigue existiendo y, si se llena, tiene prioridad (para pruebas).
-export const CLIENT_ID_APP = '';
+export const CLIENT_ID_APP = '519666136402-mqpkakf9a1dr87lfave9871meu623i38.apps.googleusercontent.com';
