@@ -89,13 +89,15 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-document.getElementById('shutter').addEventListener('click', () => {
+document.getElementById('shutter').addEventListener('click', async () => {
   if (disparando) return;
   if (!video.videoWidth) return toast('La cámara no está lista');
   const canvas = capturarFrame(video);
-  window.__captura = { canvas, esquinas: ultimasEsquinas };
   const fx = document.getElementById('flashfx');
   fx.classList.remove('go'); void fx.offsetWidth; fx.classList.add('go');
+  // Sin deteccion en vivo: reintenta sobre el still (con rescate) y luego con la IA local.
+  let esquinas = ultimasEsquinas || detectarDocumento(canvas, 1200) || await detectarConIA(canvas);
+  window.__captura = { canvas, esquinas };
   procesarYRevisar();
 });
 
@@ -364,6 +366,7 @@ document.getElementById('seg-orig').addEventListener('click', () => {
 // Editor de esquinas a pantalla completa (Fase 2D): abre el overlay con lupa y
 // re-procesa si el usuario aplica el recorte.
 import { abrirEditorEsquinas, initEditorEsquinas } from './esquinas.js';
+import { detectarConIA } from './detectia.js';
 initEditorEsquinas();
 
 async function ajustarEsquinas(){
@@ -409,12 +412,11 @@ async function cargarSiguienteDelLote(){
   actualizarBarraLote();
   try {
     const canvas = await archivoACanvas(lote.files[lote.i]);
-    // Importacion: no es tiempo real, se trabaja a mayor resolucion para acertar mas.
+    // Autorecorte: clasico (rapido) → IA local si fallo. El editor abre SIEMPRE con lo
+    // detectado precargado; "Aplicar" acepta el recorte y se pasa a los datos (Adobe Scan).
     let esquinas = detectarDocumento(canvas, 1200);
-    if (!esquinas){
-      // Comportamiento Adobe Scan: si no hay deteccion, se muestran las esquinas para confirmar.
-      esquinas = await abrirEditorEsquinas(canvas, null);
-    }
+    if (!esquinas) esquinas = await detectarConIA(canvas);
+    esquinas = await abrirEditorEsquinas(canvas, esquinas);
     window.__captura = { canvas, esquinas };
     procesarYRevisar();
   } catch(e){
