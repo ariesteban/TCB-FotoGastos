@@ -950,6 +950,7 @@ function abrirRevisar(archivo){
   if (!f) return;
   rvArchivo = archivo;
   rellenarPanel(f);
+  document.getElementById('rv-leer').hidden = f.estado === 'completa';
   document.getElementById('revisar-panel').hidden = false;
   cargarMiniatura(window.__gastosMes.mesId, archivo);
 }
@@ -1006,6 +1007,52 @@ async function verImagenRevision(){
     document.getElementById('visor').hidden = false;
   } catch(e){ console.error(e); toast('No se pudo cargar la imagen'); }
 }
+
+// Reintento manual (idea de Ari): lee ESTA factura al momento — Gemini si hay key y
+// conexion, OCR local si no — y deja el resultado 'pendiente' para que el usuario valide.
+async function leerConIAAhora(){
+  const ctx = window.__gastosMes;
+  if (!ctx || !rvArchivo) return;
+  const archivo = rvArchivo;
+  const btn = document.getElementById('rv-leer');
+  btn.disabled = true; btn.textContent = 'Leyendo…';
+  try {
+    const item = (await pendientesRevision()).find(x => x.archivo === archivo);
+    let blob = item ? item.blob : thumbCache.get(archivo);
+    if (!blob){
+      blob = await descargarImagen(ctx.mesId, archivo);
+      if (blob) thumbCache.set(archivo, blob);
+    }
+    if (!blob) return toast('No se encontró la imagen de la factura');
+    const canvas = await archivoACanvas(blob);
+    const key = get('geminiKey', '');
+    let datos = null, motor = null;
+    if (key){
+      try { datos = await extraerDatos(canvas, key, geminiModelo); motor = 'gemini'; }
+      catch(e){ console.error(e); }
+    }
+    if (!datos){
+      try { datos = await extraerDatosLocal(canvas); motor = 'local'; }
+      catch(e){ console.error(e); }
+    }
+    if (!datos) return toast('Sin conexión y sin OCR disponible — intenta luego');
+    const res = await actualizarEntradaConReArchivo(ctx.mesId, archivo, f => {
+      for (const c of ['fechaEmision', 'ncf', 'rncEmisor', 'nombreComercio', 'subtotal', 'itbis', 'total']){
+        if (datos[c] != null && datos[c] !== '') f[c] = datos[c];
+      }
+      if (motor === 'gemini') f.revisadaIA = true;
+      f.estado = facturaCompleta(f) ? 'pendiente' : 'incompleta';
+    });
+    if (!res) return toast('La factura ya no está en el índice');
+    if (item) await eliminarRevision(item.id); // ya leida: fuera de la cola de revision
+    rvArchivo = res.nombreFinal;
+    rellenarPanel(res.entrada);
+    refrescarGastos();
+    toast('Datos leídos — revisa y confirma');
+  } catch(e){ console.error(e); toast('No se pudo leer: ' + e.message); }
+  finally { btn.disabled = false; btn.textContent = 'Leer con IA'; }
+}
+document.getElementById('rv-leer').addEventListener('click', leerConIAAhora);
 
 document.getElementById('revisar-cerrar').addEventListener('click', cerrarRevisar);
 document.getElementById('rv-confirmar').addEventListener('click', confirmarRevision);
