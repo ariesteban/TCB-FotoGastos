@@ -130,6 +130,7 @@ async function procesarYRevisar(){
   document.getElementById('seg-proc').classList.toggle('on', !!r);
   document.getElementById('seg-orig').classList.toggle('on', !r);
   actualizarUIFiltros();
+  motorPreferido = 'ia'; // cada factura nueva vuelve al motor por defecto
   leerDatosDeFactura(); // los datos no dependen del color; no se repite al cambiar de filtro
 }
 window.procesarYRevisar = procesarYRevisar;
@@ -174,26 +175,46 @@ function leerCampos(){
 function okChip(txt){ return `<span class="chip ok"><span class="dot"></span>${txt}</span>`; }
 function warnChip(txt){ return `<span class="chip warn"><span class="dot"></span>${txt}</span>`; }
 
-// Deshabilita los campos Y el botón de confirmar mientras Gemini lee: evita que una edición
-// manual sea pisada por la respuesta tardía del OCR (los inputs deshabilitados no emiten
-// 'change'), y que se suba una factura con los datos aún en null / archivada por fecha de
-// respaldo en vez de la de emisión. Se reactiva al terminar la lectura vigente.
+// Deshabilita los campos mientras el motor lee (una respuesta tardia no debe pisar una
+// edicion manual). El boton Confirmar queda SIEMPRE habilitado: guardar durante la
+// lectura cancela la peticion y sube la factura como provisional (la IA la revisa luego).
 function setCamposHabilitados(hab){
   CAMPOS_IDS.forEach(id => { document.getElementById(id).disabled = !hab; });
-  document.getElementById('confirm-btn').disabled = !hab;
 }
+
+// Motor elegido para ESTA factura (se restablece a IA en cada captura). El toggle solo
+// aparece con API key; sin key siempre es OCR local, como antes.
+let motorPreferido = 'ia';
+let abortLectura = null;
+
+function actualizarUIMotor(){
+  document.getElementById('motor-ia').classList.toggle('on', motorPreferido === 'ia');
+  document.getElementById('motor-ocr').classList.toggle('on', motorPreferido === 'ocr');
+}
+document.getElementById('motor-ia').addEventListener('click', () => {
+  if (motorPreferido === 'ia') return;
+  motorPreferido = 'ia'; leerDatosDeFactura();
+});
+document.getElementById('motor-ocr').addEventListener('click', () => {
+  if (motorPreferido === 'ocr') return;
+  motorPreferido = 'ocr'; leerDatosDeFactura();
+});
 
 async function leerDatosDeFactura(){
   const miGen = ++genOCR;
+  if (abortLectura){ abortLectura.abort(); abortLectura = null; } // cancela lectura previa
   const key = get('geminiKey', '');
   const origen = document.getElementById('datos-origen');
   const nota = document.getElementById('nota-verificar');
+  document.getElementById('motor-seg').hidden = !key;
+  actualizarUIMotor();
   vaciarCampos();
   nota.hidden = true;
-  // Reset del estado ANTES del await: si el usuario confirma durante la carga, no se
-  // suben metadatos de una factura anterior (riesgo de cumplimiento fiscal).
+  // Reset del estado ANTES del await: si el usuario confirma durante la carga, la factura
+  // sube como provisional (origen 'cargando'), nunca con metadatos de una factura anterior.
   window.__datos = { origen: 'cargando' };
-  const canvas = window.__resultado?.canvasFinal;
+  // Sin esquinas no se salta la lectura: se lee la imagen original completa.
+  const canvas = window.__resultado?.canvasFinal || window.__resultado?.canvasOriginal;
   if (!canvas){
     setCamposHabilitados(true);
     origen.hidden = false; origen.textContent = 'sin imagen';
@@ -201,22 +222,25 @@ async function leerDatosDeFactura(){
     await validarCampos(miGen);
     return;
   }
-  // Motor: con key intenta Gemini y si la red falla cae a OCR local; sin key, OCR local.
+  const usarIA = !!key && motorPreferido === 'ia';
   origen.hidden = false;
-  origen.textContent = key ? `Leyendo con ${ETIQUETA_MODELO[geminiModelo] || geminiModelo}…` : 'Leyendo (OCR local)…';
+  origen.textContent = usarIA ? `Leyendo con ${ETIQUETA_MODELO[geminiModelo] || geminiModelo}…` : 'Leyendo (OCR local)…';
   setCamposHabilitados(false);
   let datos = null, motor = 'manual';
   try {
-    if (key){
-      try { datos = await extraerDatos(canvas, key, geminiModelo); motor = 'gemini'; }
-      catch(e){ // sin conexión / error HTTP → respaldo local
+    if (usarIA){
+      abortLectura = new AbortController();
+      try { datos = await extraerDatos(canvas, key, geminiModelo, abortLectura.signal); motor = 'gemini'; }
+      catch(e){
+        // Cancelada (toggle a OCR, guardado o re-proceso): la nueva accion controla la UI.
+        if (e.name === 'AbortError') return;
         console.error(e);
         // Si el error es de credenciales/cuota (no de red), avisar que revise la API key
         // en vez de degradar en silencio; igual se cae a OCR local para no bloquear.
         if (/\b(400|401|403|429)\b/.test(e.message || '')) toast('Problema con la API key de Gemini — revísala en Ajustes');
         origen.textContent = 'Leyendo (OCR local)…';
         datos = await extraerDatosLocal(canvas); motor = 'local';
-      }
+      } finally { abortLectura = null; }
     } else {
       datos = await extraerDatosLocal(canvas); motor = 'local';
     }
@@ -311,10 +335,10 @@ function cambiarModo(nuevo){
 const visor = document.getElementById('visor');
 const visorImg = document.getElementById('visor-img');
 function abrirVisor(){
-  if (editandoEsquinas) return; // en modo esquinas, el toque es para arrastrar, no para el visor
   const rev = document.getElementById('rev-canvas');
   if (!rev.width) return;
   visorImg.src = rev.toDataURL('image/jpeg', 0.92);
+  document.getElementById('visor-recortar').hidden = false; // hay captura local: se puede recortar
   visor.hidden = false;
 }
 function cerrarVisor(){
@@ -337,79 +361,26 @@ document.getElementById('seg-orig').addEventListener('click', () => {
   document.getElementById('seg-orig').classList.add('on'); document.getElementById('seg-proc').classList.remove('on');
 });
 
-// Arrastre de 4 esquinas sobre la imagen original; al soltar se reprocesa.
-const esqCanvas = document.getElementById('rev-esquinas');
-let editandoEsquinas = false, esquinasEdit = null, puntoActivo = -1;
+// Editor de esquinas a pantalla completa (Fase 2D): abre el overlay con lupa y
+// re-procesa si el usuario aplica el recorte.
+import { abrirEditorEsquinas, initEditorEsquinas } from './esquinas.js';
+initEditorEsquinas();
 
-document.getElementById('btn-esquinas').addEventListener('click', () => {
-  if (!window.__resultado) return;
-  if (editandoEsquinas){
-    editandoEsquinas = false;
-    esqCanvas.style.display = 'none';
-    document.getElementById('btn-esquinas').textContent = 'Ajustar esquinas manualmente';
-    window.__captura.esquinas = ordenarEsquinas(esquinasEdit);
-    procesarYRevisar();
-    return;
-  }
-  const { canvasOriginal, esquinas } = window.__resultado;
-  editandoEsquinas = true;
-  const m = 0.1;
-  esquinasEdit = (esquinas || [
-    {x: canvasOriginal.width*m,     y: canvasOriginal.height*m},
-    {x: canvasOriginal.width*(1-m), y: canvasOriginal.height*m},
-    {x: canvasOriginal.width*(1-m), y: canvasOriginal.height*(1-m)},
-    {x: canvasOriginal.width*m,     y: canvasOriginal.height*(1-m)}
-  ]).map(p => ({...p}));
-  pintarEnRevision(canvasOriginal);
-  esqCanvas.style.display = 'block';
-  document.getElementById('btn-esquinas').textContent = 'Aplicar esquinas';
-  document.getElementById('rev-file').textContent = 'Ajustando esquinas — arrastra los 4 puntos';
-  document.getElementById('seg-orig').classList.add('on');
-  document.getElementById('seg-proc').classList.remove('on');
-  dibujarEsquinas();
-});
+async function ajustarEsquinas(){
+  const res = window.__resultado;
+  if (!res) return;
+  const esq = await abrirEditorEsquinas(res.canvasOriginal, res.esquinas || null);
+  if (!esq) return;
+  window.__captura = { canvas: res.canvasOriginal, esquinas: esq };
+  procesarYRevisar();
+}
+document.getElementById('btn-esquinas').addEventListener('click', ajustarEsquinas);
 
-function dibujarEsquinas(){
-  const rev = document.getElementById('rev-canvas');
-  esqCanvas.width = rev.width; esqCanvas.height = rev.height;
-  const ctx = esqCanvas.getContext('2d');
-  ctx.clearRect(0, 0, esqCanvas.width, esqCanvas.height);
-  ctx.beginPath();
-  esquinasEdit.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
-  ctx.closePath();
-  ctx.strokeStyle = '#4E9BEB'; ctx.lineWidth = esqCanvas.width * 0.006; ctx.stroke();
-  esquinasEdit.forEach(p => {
-    ctx.beginPath(); ctx.arc(p.x, p.y, esqCanvas.width * 0.03, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(78,155,235,.9)'; ctx.fill();
-  });
-}
-
-function puntoDesdeEvento(ev){
-  const r = esqCanvas.getBoundingClientRect();
-  return { x: (ev.clientX - r.left) * esqCanvas.width / r.width,
-           y: (ev.clientY - r.top) * esqCanvas.height / r.height };
-}
-function empezarArrastre(ev){
-  if (!editandoEsquinas) return;
-  const p = puntoDesdeEvento(ev);
-  puntoActivo = esquinasEdit.findIndex(q => Math.hypot(q.x - p.x, q.y - p.y) < esqCanvas.width * 0.08);
-}
-function mover(ev){
-  if (puntoActivo < 0) return;
-  ev.preventDefault();
-  esquinasEdit[puntoActivo] = puntoDesdeEvento(ev);
-  dibujarEsquinas();
-}
-function soltar(){
-  if (puntoActivo < 0) return;
-  puntoActivo = -1;
-}
-esqCanvas.addEventListener('pointerdown', empezarArrastre);
-esqCanvas.addEventListener('pointermove', mover);
-esqCanvas.addEventListener('pointerup', soltar);
+const visorRecortar = document.getElementById('visor-recortar');
+visorRecortar.addEventListener('click', () => { cerrarVisor(); ajustarEsquinas(); });
 
 import { cvReady } from './cvready.js';
-import { detectarDocumento, esEstable, nitidezRegion, ordenarEsquinas } from './detect.js';
+import { detectarDocumento, esEstable, nitidezRegion } from './detect.js';
 import { archivoACanvas } from './importar.js';
 
 // ---------- Importación en lote (Fase 2B) ----------
@@ -438,7 +409,12 @@ async function cargarSiguienteDelLote(){
   actualizarBarraLote();
   try {
     const canvas = await archivoACanvas(lote.files[lote.i]);
-    const esquinas = detectarDocumento(canvas);
+    // Importacion: no es tiempo real, se trabaja a mayor resolucion para acertar mas.
+    let esquinas = detectarDocumento(canvas, 1200);
+    if (!esquinas){
+      // Comportamiento Adobe Scan: si no hay deteccion, se muestran las esquinas para confirmar.
+      esquinas = await abrirEditorEsquinas(canvas, null);
+    }
     window.__captura = { canvas, esquinas };
     procesarYRevisar();
   } catch(e){
@@ -469,6 +445,7 @@ function avanzarLoteOIr(destino){
 
 // Cancelar el lote (p. ej. al volver a Cámara desde Revisión a mitad de la validación).
 function cancelarLoteYVolver(){
+  if (abortLectura){ abortLectura.abort(); abortLectura = null; } // no seguir leyendo en vano
   if (window.__lote){ window.__lote = null; actualizarBarraLote(); }
   show('camara');
 }
@@ -575,7 +552,8 @@ modeloEl.addEventListener('click', (ev) => {
 });
 
 // Conexión a Google Drive (Task 9)
-import { initAuth, conectar, conectado, asegurarCarpeta, buscarCarpeta, listarNombres, subirJPEG, leerJSON, guardarJSON, descargarImagen } from './drive.js';
+import { initAuth, conectar, conectado, asegurarCarpeta, buscarCarpeta, listarNombres, subirJPEG, leerJSON, guardarJSON, descargarImagen,
+         buscarArchivo, moverYRenombrar, nombreDe } from './drive.js';
 
 document.getElementById('btn-conectar').addEventListener('click', async () => {
   const btn = document.getElementById('btn-conectar');
@@ -603,14 +581,15 @@ document.getElementById('btn-conectar').addEventListener('click', async () => {
 });
 
 // Confirmar y subir + pantalla Gastos (Task 10)
-import { nombreCarpetaMes, siguienteNombre, hoyISO } from './naming.js';
+import { nombreCarpetaMes, siguienteNombre, hoyISO,
+         nombreProvisional, nombreUnico, esProvisional, necesitaReArchivo } from './naming.js';
 
 // Cola offline en IndexedDB con reintento al reconectar (Task 11)
 import { encolar, pendientes, eliminar, cuenta } from './queue.js';
 
 // Índice _gastos.json por mes (Task 5): archiva por fecha de EMISIÓN (con respaldo a
 // la fecha del dispositivo), registra metadatos y marca duplicados sin bloquear la subida.
-import { agregarEntrada, entradaDeFactura } from './indice.js';
+import { agregarEntrada, entradaDeFactura, quitarEntrada } from './indice.js';
 
 // Mutex que serializa TODAS las escrituras a _gastos.json (subida, revisor con Gemini y
 // confirmación del usuario): cada una hace su read-modify-write sin que otra la pise
@@ -626,20 +605,25 @@ function subirFactura(blob, datos){
   return conLockIndice(async () => {
     const raizId = get('carpetaRaizId');
     if (!conectado() || !raizId) throw new Error('sin-conexion');
-    const fechaISO = normalizarFecha(datos.fechaEmision) || hoyISO(); // respaldo: fecha del dispositivo
-    const mesId = await asegurarCarpeta(nombreCarpetaMes(fechaISO), raizId);
+    const fechaISO = normalizarFecha(datos.fechaEmision); // null → subida provisional
+    const carpetaMes = nombreCarpetaMes(fechaISO || hoyISO());
+    const mesId = await asegurarCarpeta(carpetaMes, raizId);
     const idx = await leerJSON(mesId, '_gastos.json');
     // Re-chequeo definitivo contra el índice actual (cubre reintentos de la cola offline,
     // donde el duplicado pudo registrarse después de que la factura se encoló).
     const dup = buscarDuplicado(idx, datos.ncf);
-    const nombre = siguienteNombre(fechaISO, await listarNombres(mesId));
-    await subirJPEG(blob, nombre, mesId);
-    // El índice registra la fecha REALMENTE usada para archivar (fechaISO), no el texto crudo:
-    // si el OCR dio una fecha no parseable y se usó el respaldo (hoy), el índice coincide con
-    // la carpeta donde quedó el archivo — trazabilidad fiscal correcta.
+    const nombres = await listarNombres(mesId);
+    // Sin fecha de emision el nombre es provisional; el revisor lo re-archiva al conocerla.
+    const nombre = fechaISO ? siguienteNombre(fechaISO, nombres)
+                            : nombreUnico(nombreProvisional(), nombres);
+    const subida = await subirJPEG(blob, nombre, mesId);
+    // El índice registra la fecha REALMENTE usada para archivar (fechaISO o ninguna), no el
+    // texto crudo: siempre coincide con la carpeta donde quedó el archivo — trazabilidad 606.
     const entrada = entradaDeFactura(nombre, { ...datos, fechaEmision: fechaISO }, datos.origen || 'manual', !!dup);
+    entrada.driveId = subida.id; // permite re-archivar sin buscar por nombre (idempotente)
+    if (!fechaISO){ entrada.estado = 'pendiente'; entrada.provisional = true; }
     await guardarJSON(mesId, '_gastos.json', agregarEntrada(idx, entrada));
-    // Si quedó incompleta o la leyó el OCR local, se guarda para que Gemini la revise luego.
+    // Si quedó incompleta, provisional o leída por OCR local, Gemini la revisa luego.
     if (entrada.estado !== 'completa'){
       try { await encolarRevision({ blob, mesId, archivo: nombre }); } catch(e){ console.error(e); }
     }
@@ -647,9 +631,52 @@ function subirFactura(blob, datos){
   });
 }
 
+// Aplica `mutador(f)` a la entrada del indice y, si la fecha de emision ya no coincide
+// con la carpeta/nombre actual (o el nombre es provisional), renombra y mueve el archivo
+// en Drive y transfiere la entrada al indice del mes destino. Orden seguro: primero el
+// archivo, despues los indices; driveId hace la operacion re-ejecutable si algo falla a
+// mitad. Devuelve null si la entrada ya no existe.
+function actualizarEntradaConReArchivo(mesId, archivo, mutador){
+  return conLockIndice(async () => {
+    const idx = await leerJSON(mesId, '_gastos.json');
+    const f = idx?.facturas?.find(x => x.archivo === archivo);
+    if (!f) return null;
+    mutador(f);
+    const fechaISO = normalizarFecha(f.fechaEmision);
+    if (fechaISO) f.fechaEmision = fechaISO;
+    const carpetaActual = await nombreDe(mesId);
+    if (!fechaISO || !necesitaReArchivo(archivo, carpetaActual, fechaISO)){
+      await guardarJSON(mesId, '_gastos.json', idx);
+      return { nombreFinal: archivo, estado: f.estado, movidaA: null };
+    }
+    const carpetaDestino = nombreCarpetaMes(fechaISO);
+    const destinoId = carpetaDestino === carpetaActual ? mesId
+                    : await asegurarCarpeta(carpetaDestino, get('carpetaRaizId'));
+    const nombreFinal = siguienteNombre(fechaISO, await listarNombres(destinoId));
+    const fileId = f.driveId || await buscarArchivo(mesId, archivo);
+    if (!fileId) throw new Error('No se encontró ' + archivo + ' en Drive');
+    await moverYRenombrar(fileId, nombreFinal, destinoId, mesId);
+    // OJO: entrada NUEVA sin mutar `f`, para que quitarEntrada (nombre viejo) si la elimine.
+    const entradaFinal = { ...f, archivo: nombreFinal };
+    delete entradaFinal.provisional;
+    if (destinoId === mesId){
+      await guardarJSON(mesId, '_gastos.json', agregarEntrada(quitarEntrada(idx, archivo), entradaFinal));
+    } else {
+      const idxDest = await leerJSON(destinoId, '_gastos.json');
+      entradaFinal.duplicada = entradaFinal.duplicada || !!buscarDuplicado(idxDest, entradaFinal.ncf);
+      await guardarJSON(destinoId, '_gastos.json', agregarEntrada(idxDest, entradaFinal));
+      await guardarJSON(mesId, '_gastos.json', quitarEntrada(idx, archivo));
+    }
+    return { nombreFinal, estado: entradaFinal.estado, movidaA: destinoId === mesId ? null : carpetaDestino };
+  });
+}
+
 document.getElementById('confirm-btn').addEventListener('click', async () => {
   const res = window.__resultado;
   if (!res) return;
+  // Guardar durante la lectura: se cancela la peticion en vuelo y la factura sube como
+  // provisional (origen 'cargando'); la IA en background la lee y la re-archiva despues.
+  if (abortLectura){ abortLectura.abort(); abortLectura = null; setCamposHabilitados(true); }
   const canvas = res.canvasFinal || res.canvasOriginal;
   // Se congelan los datos ANTES del await de la subida: si el usuario edita los campos
   // mientras la factura sube, no queremos que un cambio a mitad de camino contamine
@@ -670,7 +697,9 @@ document.getElementById('confirm-btn').addEventListener('click', async () => {
     }
     colaEnProceso = true; lockAdquirido = true;
     const { nombre, duplicada } = await subirFactura(blob, datos);
-    toast(duplicada ? `Subida: ${nombre} — marcada como DUPLICADA (revísala en Gastos)` : `Subida: ${nombre} ✓`);
+    toast(duplicada ? `Subida: ${nombre} — marcada como DUPLICADA (revísala en Gastos)`
+        : esProvisional(nombre) ? 'Subida ✓ — la IA leerá los datos y la renombrará'
+        : `Subida: ${nombre} ✓`);
     avanzarLoteOIr('gastos');
   } catch(e){
     console.error(e);
@@ -743,11 +772,9 @@ async function revisarPendientes(){
       try { datos = await extraerDatos(canvas, key, geminiModelo); }
       catch(e){ console.error(e); break; } // error de red/HTTP con Gemini: reintentar todo luego
       try {
-        // read-modify-write atómico contra el índice VIGENTE en Drive (no un snapshot viejo)
-        await conLockIndice(async () => {
-          const idx = await leerJSON(item.mesId, '_gastos.json');
-          const f = idx?.facturas?.find(x => x.archivo === item.archivo);
-          if (!f) return; // la entrada ya no existe
+        // read-modify-write atómico contra el índice VIGENTE en Drive; si Gemini fijó la
+        // fecha, el helper renombra/mueve el archivo (Pendiente_… → Compra_DDN en su mes).
+        await actualizarEntradaConReArchivo(item.mesId, item.archivo, f => {
           if (datos){
             for (const c of ['fechaEmision', 'ncf', 'rncEmisor', 'nombreComercio', 'subtotal', 'itbis', 'total']){
               if (datos[c] != null && datos[c] !== '') f[c] = datos[c];
@@ -755,7 +782,6 @@ async function revisarPendientes(){
           }
           f.revisadaIA = true;
           f.estado = facturaCompleta(f) ? 'pendiente' : 'incompleta'; // el usuario confirma después
-          await guardarJSON(item.mesId, '_gastos.json', idx);
         });
         await eliminarRevision(item.id);
       } catch(e){ console.error(e); break; } // fallo de Drive: reintentar en la próxima corrida
@@ -777,7 +803,7 @@ async function refrescarGastos(){
     // El índice es opcional (mes recién creado o _gastos.json aún inexistente); si falla
     // la lectura, se sigue mostrando la lista sin el marcado de duplicadas.
     const [nombres, idx] = await Promise.all([
-      listarNombres(mesId).then(ns => ns.filter(n => /^Compra_/i.test(n))),
+      listarNombres(mesId).then(ns => ns.filter(n => /^(Compra|Pendiente)_/i.test(n))),
       leerJSON(mesId, '_gastos.json').catch(() => null)
     ]);
     const entradaPorArchivo = new Map((idx?.facturas || []).map(f => [f.archivo, f]));
@@ -819,7 +845,8 @@ async function refrescarGastos(){
           chip.style.cssText = 'margin-top:4px; font-size:10px; padding:2px 8px';
           chip.innerHTML = '<span class="dot"></span>' + est[1];
           amt.appendChild(chip);
-          // las facturas por revisar son tocables: abren el panel de confirmación
+        }
+        if (e){ // toda factura con entrada en el indice se puede abrir y editar
           inv.style.cursor = 'pointer';
           inv.addEventListener('click', () => abrirRevisar(e.archivo));
         }
@@ -836,6 +863,34 @@ document.getElementById('tab-gastos').addEventListener('click', () => { refresca
 const RV_CAMPOS = { 'rv-fecha':'fechaEmision','rv-ncf':'ncf','rv-rnc':'rncEmisor','rv-comercio':'nombreComercio','rv-subtotal':'subtotal','rv-itbis':'itbis','rv-total':'total' };
 let rvArchivo = null;
 
+// Miniaturas del panel de revision: cache por sesion para no re-descargar de Drive.
+const thumbCache = new Map(); // archivo → Blob
+let rvThumbURL = null;
+
+async function cargarMiniatura(mesId, archivo){
+  const img = document.getElementById('rv-thumb');
+  img.hidden = true;
+  if (rvThumbURL){ URL.revokeObjectURL(rvThumbURL); rvThumbURL = null; }
+  try {
+    let blob = thumbCache.get(archivo);
+    if (!blob){
+      blob = await descargarImagen(mesId, archivo);
+      if (blob) thumbCache.set(archivo, blob);
+    }
+    if (!blob || rvArchivo !== archivo) return; // panel cerrado o cambiado mientras bajaba
+    rvThumbURL = URL.createObjectURL(blob);
+    img.src = rvThumbURL;
+    img.hidden = false;
+  } catch(e){ console.error(e); }
+}
+document.getElementById('rv-thumb').addEventListener('click', () => {
+  const blob = thumbCache.get(rvArchivo);
+  if (!blob) return;
+  document.getElementById('visor-recortar').hidden = true; // imagen de Drive: sin recorte
+  document.getElementById('visor-img').src = URL.createObjectURL(blob);
+  document.getElementById('visor').hidden = false;
+});
+
 function abrirRevisar(archivo){
   const idx = window.__gastosMes?.idx;
   const f = idx?.facturas?.find(x => x.archivo === archivo);
@@ -846,8 +901,14 @@ function abrirRevisar(archivo){
     document.getElementById(id).value = f[campo] != null ? f[campo] : '';
   }
   document.getElementById('revisar-panel').hidden = false;
+  cargarMiniatura(window.__gastosMes.mesId, archivo);
 }
-function cerrarRevisar(){ document.getElementById('revisar-panel').hidden = true; rvArchivo = null; }
+function cerrarRevisar(){
+  document.getElementById('revisar-panel').hidden = true;
+  rvArchivo = null;
+  if (rvThumbURL){ URL.revokeObjectURL(rvThumbURL); rvThumbURL = null; }
+  document.getElementById('rv-thumb').hidden = true;
+}
 
 async function confirmarRevision(){
   const ctx = window.__gastosMes;
@@ -861,20 +922,17 @@ async function confirmarRevision(){
   }
   const btn = document.getElementById('rv-confirmar');
   btn.disabled = true; btn.textContent = 'Guardando…';
-  let estadoFinal = null;
   try {
-    // Read-modify-write atómico: re-lee el índice fresco de Drive y aplica SOLO esta entrada,
-    // para no pisar cambios que el revisor u otra subida hayan escrito mientras el panel estaba abierto.
-    await conLockIndice(async () => {
-      const idx = await leerJSON(ctx.mesId, '_gastos.json');
-      const f = idx?.facturas?.find(x => x.archivo === archivo);
-      if (!f) throw new Error('La factura ya no está en el índice');
+    // Read-modify-write atómico: re-lee el índice fresco de Drive y aplica SOLO esta entrada.
+    // Si el usuario cambió la fecha de emisión, el helper re-archiva (renombra/mueve) igual
+    // que el revisor en background.
+    const res = await actualizarEntradaConReArchivo(ctx.mesId, archivo, f => {
       Object.assign(f, edits);
       f.estado = facturaCompleta(f) ? 'completa' : 'incompleta';
-      estadoFinal = f.estado;
-      await guardarJSON(ctx.mesId, '_gastos.json', idx);
     });
-    toast(estadoFinal === 'completa' ? 'Factura confirmada ✓' : 'Guardada — aún faltan datos');
+    if (!res) throw new Error('La factura ya no está en el índice');
+    toast(res.movidaA ? `Guardada como ${res.nombreFinal} en ${res.movidaA} ✓`
+        : res.estado === 'completa' ? 'Factura confirmada ✓' : 'Guardada — aún faltan datos');
     cerrarRevisar();
     refrescarGastos();
   } catch(e){ console.error(e); toast('No se pudo guardar: ' + e.message); }
@@ -886,10 +944,15 @@ async function verImagenRevision(){
   if (!ctx || !rvArchivo) return;
   toast('Cargando imagen…');
   try {
-    const blob = await descargarImagen(ctx.mesId, rvArchivo);
+    let blob = thumbCache.get(rvArchivo);
+    if (!blob){
+      blob = await descargarImagen(ctx.mesId, rvArchivo);
+      if (blob) thumbCache.set(rvArchivo, blob);
+    }
     if (!blob) return toast('No se encontró la imagen en Drive');
     const visorImg = document.getElementById('visor-img');
     visorImg.src = URL.createObjectURL(blob);
+    document.getElementById('visor-recortar').hidden = true; // imagen de Drive: sin recorte
     document.getElementById('visor').hidden = false;
   } catch(e){ console.error(e); toast('No se pudo cargar la imagen'); }
 }

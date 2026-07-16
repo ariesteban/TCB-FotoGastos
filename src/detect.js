@@ -41,63 +41,135 @@ export function cuadrilateroValido(e, wFrame, hFrame){
   return true;
 }
 
+export function escalaTrabajo(w, h, maxLado = 700){
+  return Math.min(1, maxLado / Math.max(w, h));
+}
+
 // Requieren OpenCV (solo navegador) ---------------------------------------
-export function detectarDocumento(srcCanvas, escala = 0.35){
-  const w = Math.round(srcCanvas.width * escala), h = Math.round(srcCanvas.height * escala);
-  const small = document.createElement('canvas');
-  small.width = w; small.height = h;
-  small.getContext('2d').drawImage(srcCanvas, 0, 0, w, h);
 
-  let mat, gray, th, kernel, contours, hier;
+// --- binarizaciones candidatas (cada una devuelve un Mat nuevo; el llamador lo libera) ---
+function cerrarYAbrir(th){
+  // Cierre: rellena huecos del texto para que el papel sea una sola mancha solida.
+  const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9, 9));
   try {
-    mat = cv.imread(small);
-    gray = new cv.Mat();
-    th = new cv.Mat();
-    cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
-    // Umbral de Otsu: separa el papel (brillante) del fondo. El papel queda en blanco (255) para findContours.
-    cv.threshold(gray, th, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-    // Cierre morfológico: rellena huecos del texto para que el papel sea una sola mancha sólida.
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9, 9));
-    cv.morphologyEx(th, th, cv.MORPH_CLOSE, kernel);
-    cv.morphologyEx(th, th, cv.MORPH_OPEN, kernel);
+    cv.morphologyEx(th, th, cv.MORPH_CLOSE, k);
+    cv.morphologyEx(th, th, cv.MORPH_OPEN, k);
+  } finally { k.delete(); }
+}
+function binOtsu(gray){
+  const th = new cv.Mat();
+  cv.threshold(gray, th, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+  cerrarYAbrir(th);
+  return th;
+}
+function binAdaptativa(gray){
+  const th = new cv.Mat();
+  cv.adaptiveThreshold(gray, th, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 51, 10);
+  cerrarYAbrir(th);
+  return th;
+}
+function binCanny(gray){
+  const th = new cv.Mat();
+  cv.Canny(gray, th, 50, 150);
+  const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+  try { cv.dilate(th, th, k); } finally { k.delete(); }
+  return th;
+}
 
+// Intenta reducir un contorno a 4 esquinas: primero el contorno directo y, si sale con
+// mas vertices (bordes ondulados, esquinas redondeadas), su casco convexo con epsilon
+// creciente. La guarda de solidez evita dar por recibo una madeja de bordes fusionados
+// (p. ej. papel + brillo del fondo unidos por el dilate), cuyo casco seria basura.
+function aCuatroEsquinas(c, area){
+  let approx = new cv.Mat();
+  try {
+    cv.approxPolyDP(c, approx, 0.02 * cv.arcLength(c, true), true);
+    if (approx.rows === 4 && cv.isContourConvex(approx)) return leerPuntos(approx);
+  } finally { approx.delete(); }
+  let hull;
+  try {
+    hull = new cv.Mat();
+    cv.convexHull(c, hull);
+    if (area / cv.contourArea(hull) < 0.8) return null; // poco solido: no es un papel
+    const per = cv.arcLength(hull, true);
+    for (const e of [0.02, 0.04, 0.08]){
+      const ap = new cv.Mat();
+      try {
+        cv.approxPolyDP(hull, ap, e * per, true);
+        if (ap.rows === 4 && cv.isContourConvex(ap)) return leerPuntos(ap);
+      } finally { ap.delete(); }
+    }
+    return null;
+  } finally { if (hull) hull.delete(); }
+}
+
+function leerPuntos(approx){
+  const pts = [];
+  for (let j = 0; j < 4; j++)
+    pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
+  return pts;
+}
+
+// Mayor cuadrilatero convexo del binario, en coords del canvas ORIGINAL (o null).
+function cuadrilateroDeBinaria(th, escala, minArea){
+  let contours, hier;
+  try {
     contours = new cv.MatVector();
     hier = new cv.Mat();
     cv.findContours(th, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-    let mejor = null, mejorArea = w * h * 0.12;
+    let mejor = null, mejorArea = minArea;
     for (let i = 0; i < contours.size(); i++){
-      let c, approx;
+      let c;
       try {
         c = contours.get(i);
         const area = cv.contourArea(c);
         if (area > mejorArea){
-          approx = new cv.Mat();
-          cv.approxPolyDP(c, approx, 0.02 * cv.arcLength(c, true), true);
-          if (approx.rows === 4 && cv.isContourConvex(approx)){
-            const pts = [];
-            for (let j = 0; j < 4; j++)
-              pts.push({ x: approx.data32S[j * 2] / escala, y: approx.data32S[j * 2 + 1] / escala });
-            mejorArea = area; mejor = pts;
+          const pts = aCuatroEsquinas(c, area);
+          if (pts){
+            mejorArea = area;
+            mejor = pts.map(p => ({ x: p.x / escala, y: p.y / escala }));
           }
         }
       } finally {
-        if (approx) approx.delete();
         if (c) c.delete();
       }
     }
-
-    if (!mejor) return null;
-    const ordenado = ordenarEsquinas(mejor);
-    return cuadrilateroValido(ordenado, srcCanvas.width, srcCanvas.height) ? ordenado : null;
+    return mejor;
   } finally {
-    if (mat) mat.delete();
-    if (gray) gray.delete();
-    if (th) th.delete();
-    if (kernel) kernel.delete();
     if (hier) hier.delete();
     if (contours) contours.delete();
+  }
+}
+
+export function detectarDocumento(srcCanvas, maxLado = 700){
+  const escala = escalaTrabajo(srcCanvas.width, srcCanvas.height, maxLado);
+  const w = Math.round(srcCanvas.width * escala), h = Math.round(srcCanvas.height * escala);
+  const small = document.createElement('canvas');
+  small.width = w; small.height = h;
+  small.getContext('2d').drawImage(srcCanvas, 0, 0, w, h);
+  let mat, gray;
+  try {
+    mat = cv.imread(small);
+    gray = new cv.Mat();
+    cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+    // Cascada: Otsu (fondos lisos oscuros) → adaptativa (brillos parejos) → Canny
+    // (fondos claros/texturados como metal, donde un umbral global no separa el papel).
+    for (const bin of [binOtsu, binAdaptativa, binCanny]){
+      let th;
+      try {
+        th = bin(gray);
+        const pts = cuadrilateroDeBinaria(th, escala, w * h * 0.12);
+        if (pts){
+          const ordenado = ordenarEsquinas(pts);
+          if (cuadrilateroValido(ordenado, srcCanvas.width, srcCanvas.height)) return ordenado;
+        }
+      } finally { if (th) th.delete(); }
+    }
+    return null;
+  } finally {
+    if (gray) gray.delete();
+    if (mat) mat.delete();
   }
 }
 
