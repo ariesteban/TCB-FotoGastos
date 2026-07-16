@@ -543,3 +543,4 @@ html[data-theme="light"] #batch-count{color:#16202B}
 .esq-lupa[hidden]{display:none}
 .esq-acciones{ display:flex; gap:10px; padding:12px 16px calc(12px + env(safe-area-inset-bottom)); }
 .esq-acciones .btn{ flex:1; margin:0; }
+.visor-recortar{ left:12px; right:auto; }

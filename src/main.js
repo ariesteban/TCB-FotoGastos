@@ -193,7 +193,8 @@ async function leerDatosDeFactura(){
   // Reset del estado ANTES del await: si el usuario confirma durante la carga, no se
   // suben metadatos de una factura anterior (riesgo de cumplimiento fiscal).
   window.__datos = { origen: 'cargando' };
-  const canvas = window.__resultado?.canvasFinal;
+  // Sin esquinas no se salta la lectura: se lee la imagen original completa.
+  const canvas = window.__resultado?.canvasFinal || window.__resultado?.canvasOriginal;
   if (!canvas){
     setCamposHabilitados(true);
     origen.hidden = false; origen.textContent = 'sin imagen';
@@ -311,10 +312,10 @@ function cambiarModo(nuevo){
 const visor = document.getElementById('visor');
 const visorImg = document.getElementById('visor-img');
 function abrirVisor(){
-  if (editandoEsquinas) return; // en modo esquinas, el toque es para arrastrar, no para el visor
   const rev = document.getElementById('rev-canvas');
   if (!rev.width) return;
   visorImg.src = rev.toDataURL('image/jpeg', 0.92);
+  document.getElementById('visor-recortar').hidden = false; // hay captura local: se puede recortar
   visor.hidden = false;
 }
 function cerrarVisor(){
@@ -337,79 +338,26 @@ document.getElementById('seg-orig').addEventListener('click', () => {
   document.getElementById('seg-orig').classList.add('on'); document.getElementById('seg-proc').classList.remove('on');
 });
 
-// Arrastre de 4 esquinas sobre la imagen original; al soltar se reprocesa.
-const esqCanvas = document.getElementById('rev-esquinas');
-let editandoEsquinas = false, esquinasEdit = null, puntoActivo = -1;
+// Editor de esquinas a pantalla completa (Fase 2D): abre el overlay con lupa y
+// re-procesa si el usuario aplica el recorte.
+import { abrirEditorEsquinas, initEditorEsquinas } from './esquinas.js';
+initEditorEsquinas();
 
-document.getElementById('btn-esquinas').addEventListener('click', () => {
-  if (!window.__resultado) return;
-  if (editandoEsquinas){
-    editandoEsquinas = false;
-    esqCanvas.style.display = 'none';
-    document.getElementById('btn-esquinas').textContent = 'Ajustar esquinas manualmente';
-    window.__captura.esquinas = ordenarEsquinas(esquinasEdit);
-    procesarYRevisar();
-    return;
-  }
-  const { canvasOriginal, esquinas } = window.__resultado;
-  editandoEsquinas = true;
-  const m = 0.1;
-  esquinasEdit = (esquinas || [
-    {x: canvasOriginal.width*m,     y: canvasOriginal.height*m},
-    {x: canvasOriginal.width*(1-m), y: canvasOriginal.height*m},
-    {x: canvasOriginal.width*(1-m), y: canvasOriginal.height*(1-m)},
-    {x: canvasOriginal.width*m,     y: canvasOriginal.height*(1-m)}
-  ]).map(p => ({...p}));
-  pintarEnRevision(canvasOriginal);
-  esqCanvas.style.display = 'block';
-  document.getElementById('btn-esquinas').textContent = 'Aplicar esquinas';
-  document.getElementById('rev-file').textContent = 'Ajustando esquinas — arrastra los 4 puntos';
-  document.getElementById('seg-orig').classList.add('on');
-  document.getElementById('seg-proc').classList.remove('on');
-  dibujarEsquinas();
-});
+async function ajustarEsquinas(){
+  const res = window.__resultado;
+  if (!res) return;
+  const esq = await abrirEditorEsquinas(res.canvasOriginal, res.esquinas || null);
+  if (!esq) return;
+  window.__captura = { canvas: res.canvasOriginal, esquinas: esq };
+  procesarYRevisar();
+}
+document.getElementById('btn-esquinas').addEventListener('click', ajustarEsquinas);
 
-function dibujarEsquinas(){
-  const rev = document.getElementById('rev-canvas');
-  esqCanvas.width = rev.width; esqCanvas.height = rev.height;
-  const ctx = esqCanvas.getContext('2d');
-  ctx.clearRect(0, 0, esqCanvas.width, esqCanvas.height);
-  ctx.beginPath();
-  esquinasEdit.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
-  ctx.closePath();
-  ctx.strokeStyle = '#4E9BEB'; ctx.lineWidth = esqCanvas.width * 0.006; ctx.stroke();
-  esquinasEdit.forEach(p => {
-    ctx.beginPath(); ctx.arc(p.x, p.y, esqCanvas.width * 0.03, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(78,155,235,.9)'; ctx.fill();
-  });
-}
-
-function puntoDesdeEvento(ev){
-  const r = esqCanvas.getBoundingClientRect();
-  return { x: (ev.clientX - r.left) * esqCanvas.width / r.width,
-           y: (ev.clientY - r.top) * esqCanvas.height / r.height };
-}
-function empezarArrastre(ev){
-  if (!editandoEsquinas) return;
-  const p = puntoDesdeEvento(ev);
-  puntoActivo = esquinasEdit.findIndex(q => Math.hypot(q.x - p.x, q.y - p.y) < esqCanvas.width * 0.08);
-}
-function mover(ev){
-  if (puntoActivo < 0) return;
-  ev.preventDefault();
-  esquinasEdit[puntoActivo] = puntoDesdeEvento(ev);
-  dibujarEsquinas();
-}
-function soltar(){
-  if (puntoActivo < 0) return;
-  puntoActivo = -1;
-}
-esqCanvas.addEventListener('pointerdown', empezarArrastre);
-esqCanvas.addEventListener('pointermove', mover);
-esqCanvas.addEventListener('pointerup', soltar);
+const visorRecortar = document.getElementById('visor-recortar');
+visorRecortar.addEventListener('click', () => { cerrarVisor(); ajustarEsquinas(); });
 
 import { cvReady } from './cvready.js';
-import { detectarDocumento, esEstable, nitidezRegion, ordenarEsquinas } from './detect.js';
+import { detectarDocumento, esEstable, nitidezRegion } from './detect.js';
 import { archivoACanvas } from './importar.js';
 
 // ---------- Importación en lote (Fase 2B) ----------
@@ -439,7 +387,11 @@ async function cargarSiguienteDelLote(){
   try {
     const canvas = await archivoACanvas(lote.files[lote.i]);
     // Importacion: no es tiempo real, se trabaja a mayor resolucion para acertar mas.
-    const esquinas = detectarDocumento(canvas, 1200);
+    let esquinas = detectarDocumento(canvas, 1200);
+    if (!esquinas){
+      // Comportamiento Adobe Scan: si no hay deteccion, se muestran las esquinas para confirmar.
+      esquinas = await abrirEditorEsquinas(canvas, null);
+    }
     window.__captura = { canvas, esquinas };
     procesarYRevisar();
   } catch(e){
@@ -891,6 +843,7 @@ async function verImagenRevision(){
     if (!blob) return toast('No se encontró la imagen en Drive');
     const visorImg = document.getElementById('visor-img');
     visorImg.src = URL.createObjectURL(blob);
+    document.getElementById('visor-recortar').hidden = true; // imagen de Drive: sin recorte
     document.getElementById('visor').hidden = false;
   } catch(e){ console.error(e); toast('No se pudo cargar la imagen'); }
 }
