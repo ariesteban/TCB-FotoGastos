@@ -596,6 +596,27 @@ import { encolar, pendientes, eliminar, cuenta } from './queue.js';
 // la fecha del dispositivo), registra metadatos y marca duplicados sin bloquear la subida.
 import { agregarEntrada, entradaDeFactura, quitarEntrada } from './indice.js';
 
+// Archivos que el revisor esta leyendo AHORA (para el chip "Leyendo con IA…" en Gastos
+// y para rellenar el panel abierto al terminar).
+const archivosEnLectura = new Set();
+
+function refrescarGastosSiVisible(){
+  if (document.getElementById('scr-gastos').classList.contains('active')) refrescarGastos();
+}
+
+function alTerminarLectura(archivoAnterior, res){
+  archivosEnLectura.delete(archivoAnterior);
+  refrescarGastosSiVisible();
+  if (!res) return;
+  // Si el usuario tiene abierto el panel de ESTA factura (aunque se haya renombrado),
+  // se rellena ante sus ojos; la confirmacion sigue siendo suya.
+  if (rvArchivo && (rvArchivo === archivoAnterior || rvArchivo === res.nombreFinal)){
+    rvArchivo = res.nombreFinal;
+    rellenarPanel(res.entrada);
+    toast('Datos leídos — revisa y confirma');
+  }
+}
+
 // Mutex que serializa TODAS las escrituras a _gastos.json (subida, revisor con Gemini y
 // confirmación del usuario): cada una hace su read-modify-write sin que otra la pise
 // entre medias, evitando perder entradas del índice del 606.
@@ -652,7 +673,7 @@ function actualizarEntradaConReArchivo(mesId, archivo, mutador){
     const carpetaActual = await nombreDe(mesId);
     if (!fechaISO || !necesitaReArchivo(archivo, carpetaActual, fechaISO)){
       await guardarJSON(mesId, '_gastos.json', idx);
-      return { nombreFinal: archivo, estado: f.estado, movidaA: null };
+      return { nombreFinal: archivo, estado: f.estado, movidaA: null, entrada: f };
     }
     const carpetaDestino = nombreCarpetaMes(fechaISO);
     const destinoId = carpetaDestino === carpetaActual ? mesId
@@ -672,7 +693,7 @@ function actualizarEntradaConReArchivo(mesId, archivo, mutador){
       await guardarJSON(destinoId, '_gastos.json', agregarEntrada(idxDest, entradaFinal));
       await guardarJSON(mesId, '_gastos.json', quitarEntrada(idx, archivo));
     }
-    return { nombreFinal, estado: entradaFinal.estado, movidaA: destinoId === mesId ? null : carpetaDestino };
+    return { nombreFinal, estado: entradaFinal.estado, movidaA: destinoId === mesId ? null : carpetaDestino, entrada: entradaFinal };
   });
 }
 
@@ -705,6 +726,7 @@ document.getElementById('confirm-btn').addEventListener('click', async () => {
     toast(duplicada ? `Subida: ${nombre} — marcada como DUPLICADA (revísala en Gastos)`
         : esProvisional(nombre) ? 'Subida ✓ — la IA leerá los datos y la renombrará'
         : `Subida: ${nombre} ✓`);
+    revisarPendientes(); // el revisor arranca de una vez, sin esperar a que abras Gastos
     avanzarLoteOIr('gastos');
   } catch(e){
     console.error(e);
@@ -747,6 +769,7 @@ async function procesarCola(){
   } finally {
     colaEnProceso = false;
     actualizarBadge();
+    revisarPendientes(); // lo recien subido de la cola puede haber quedado por revisar
   }
 }
 window.addEventListener('online', procesarCola);
@@ -773,13 +796,20 @@ async function revisarPendientes(){
         if (intentos < 3) await encolarRevision({ blob: item.blob, mesId: item.mesId, archivo: item.archivo, intentos });
         continue;
       }
+      archivosEnLectura.add(item.archivo); // chip "Leyendo con IA…" en Gastos
+      refrescarGastosSiVisible();
       let datos = null;
       try { datos = await extraerDatos(canvas, key, geminiModelo); }
-      catch(e){ console.error(e); break; } // error de red/HTTP con Gemini: reintentar todo luego
+      catch(e){ // error de red/HTTP con Gemini: reintentar todo luego
+        archivosEnLectura.delete(item.archivo);
+        refrescarGastosSiVisible();
+        console.error(e);
+        break;
+      }
       try {
         // read-modify-write atómico contra el índice VIGENTE en Drive; si Gemini fijó la
         // fecha, el helper renombra/mueve el archivo (Pendiente_… → Compra_DDN en su mes).
-        await actualizarEntradaConReArchivo(item.mesId, item.archivo, f => {
+        const res = await actualizarEntradaConReArchivo(item.mesId, item.archivo, f => {
           if (datos){
             for (const c of ['fechaEmision', 'ncf', 'rncEmisor', 'nombreComercio', 'subtotal', 'itbis', 'total']){
               if (datos[c] != null && datos[c] !== '') f[c] = datos[c];
@@ -789,7 +819,12 @@ async function revisarPendientes(){
           f.estado = facturaCompleta(f) ? 'pendiente' : 'incompleta'; // el usuario confirma después
         });
         await eliminarRevision(item.id);
-      } catch(e){ console.error(e); break; } // fallo de Drive: reintentar en la próxima corrida
+        alTerminarLectura(item.archivo, res);
+      } catch(e){
+        archivosEnLectura.delete(item.archivo);
+        console.error(e);
+        break; // fallo de Drive: reintentar en la próxima corrida
+      }
     }
   } finally {
     revisando = false;
@@ -844,7 +879,13 @@ async function refrescarGastos(){
           amt.appendChild(b);
         }
         const est = e && CHIP_ESTADO[e.estado];
-        if (est){
+        if (archivosEnLectura.has(n)){
+          const chip = document.createElement('span');
+          chip.className = 'chip info leyendo';
+          chip.style.cssText = 'margin-top:4px; font-size:10px; padding:2px 8px';
+          chip.innerHTML = '<span class="dot"></span>Leyendo con IA…';
+          amt.appendChild(chip);
+        } else if (est){
           const chip = document.createElement('span');
           chip.className = 'chip ' + est[0];
           chip.style.cssText = 'margin-top:4px; font-size:10px; padding:2px 8px';
@@ -896,15 +937,19 @@ document.getElementById('rv-thumb').addEventListener('click', () => {
   document.getElementById('visor').hidden = false;
 });
 
+function rellenarPanel(f){
+  document.getElementById('revisar-titulo').textContent = `Revisar ${f.archivo}`;
+  for (const [id, campo] of Object.entries(RV_CAMPOS)){
+    document.getElementById(id).value = f[campo] != null ? f[campo] : '';
+  }
+}
+
 function abrirRevisar(archivo){
   const idx = window.__gastosMes?.idx;
   const f = idx?.facturas?.find(x => x.archivo === archivo);
   if (!f) return;
   rvArchivo = archivo;
-  document.getElementById('revisar-titulo').textContent = `Revisar ${archivo}`;
-  for (const [id, campo] of Object.entries(RV_CAMPOS)){
-    document.getElementById(id).value = f[campo] != null ? f[campo] : '';
-  }
+  rellenarPanel(f);
   document.getElementById('revisar-panel').hidden = false;
   cargarMiniatura(window.__gastosMes.mesId, archivo);
 }
