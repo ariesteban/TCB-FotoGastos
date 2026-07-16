@@ -10,11 +10,17 @@ export function initAuth(clientId){
 
 export function conectado(){ return !!accessToken && Date.now() < expiraEn; }
 
-export function conectar(){
+let onDesconexion = null;
+export function alDesconectar(cb){ onDesconexion = cb; }
+
+// opciones.silencioso: intento sin interaccion (prompt:'') con timeout corto — se usa
+// al abrir la app para renovar el acceso si el usuario ya dio consentimiento antes.
+export function conectar(opciones = {}){
   return new Promise((res, rej) => {
     if (!tokenClient) return rej(new Error('Falta el Client ID en Ajustes'));
-    const silencioso = conectado();
-    const timer = setTimeout(() => rej(new Error('Tiempo de espera agotado al conectar con Google')), 60000);
+    const silencioso = opciones.silencioso || conectado();
+    const timer = setTimeout(() => rej(new Error('Tiempo de espera agotado al conectar con Google')),
+      opciones.silencioso ? 8000 : 60000);
     tokenClient.callback = t => {
       clearTimeout(timer);
       if (t.error) return rej(new Error(t.error));
@@ -31,6 +37,10 @@ async function api(path, opts = {}){
     ...opts,
     headers: { Authorization: 'Bearer ' + accessToken, ...(opts.headers || {}) }
   });
+  if (r.status === 401){ // token vencido a mitad de sesion: avisar para reconectar
+    accessToken = null;
+    if (onDesconexion) onDesconexion();
+  }
   if (!r.ok) throw new Error('Drive ' + r.status + ': ' + await r.text());
   return r.json();
 }

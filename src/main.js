@@ -558,7 +558,22 @@ modeloEl.addEventListener('click', (ev) => {
 
 // Conexión a Google Drive (Task 9)
 import { initAuth, conectar, conectado, asegurarCarpeta, buscarCarpeta, listarNombres, subirJPEG, leerJSON, guardarJSON, descargarImagen,
-         buscarArchivo, moverYRenombrar, nombreDe } from './drive.js';
+         buscarArchivo, moverYRenombrar, nombreDe, alDesconectar } from './drive.js';
+
+// Pasos comunes tras conectar (boton de Ajustes, aviso tocable o reconexion silenciosa).
+async function postConexion(){
+  const raizId = await asegurarCarpeta(get('carpetaRaiz', 'Gastos_NCF'));
+  set('carpetaRaizId', raizId);
+  set('driveConectadoAntes', true); // habilita la reconexion silenciosa al abrir
+  document.getElementById('drive-estado').textContent =
+    `Conectado ✓ — carpeta «${get('carpetaRaiz', 'Gastos_NCF')}» lista`;
+  const sub = document.getElementById('gastos-sub');
+  sub.textContent = 'Google Drive · conectado';
+  sub.classList.remove('accion');
+  refrescarGastos();
+  procesarCola();
+  revisarPendientes(); // re-lee con Gemini las facturas pendientes al conectar
+}
 
 document.getElementById('btn-conectar').addEventListener('click', async () => {
   const btn = document.getElementById('btn-conectar');
@@ -568,15 +583,8 @@ document.getElementById('btn-conectar').addEventListener('click', async () => {
   try {
     initAuth(clientId);
     await conectar();
-    const raizId = await asegurarCarpeta(get('carpetaRaiz', 'Gastos_NCF'));
-    set('carpetaRaizId', raizId);
-    document.getElementById('drive-estado').textContent =
-      `Conectado ✓ — carpeta «${get('carpetaRaiz', 'Gastos_NCF')}» lista`;
-    document.getElementById('gastos-sub').textContent = 'Google Drive · conectado';
+    await postConexion();
     toast('Google Drive conectado');
-    refrescarGastos();
-    procesarCola();
-    revisarPendientes(); // re-lee con Gemini las facturas pendientes al conectar
   } catch(e){
     console.error(e);
     toast('No se pudo conectar: ' + e.message);
@@ -584,6 +592,45 @@ document.getElementById('btn-conectar').addEventListener('click', async () => {
     btn.disabled = false;
   }
 });
+
+function mostrarAvisoReconectar(){
+  const sub = document.getElementById('gastos-sub');
+  sub.textContent = 'Reconectar Google Drive ▸';
+  sub.classList.add('accion');
+}
+alDesconectar(mostrarAvisoReconectar);
+
+// El subtitulo de Gastos es tocable cuando hay que reconectar (sin pasar por Ajustes).
+document.getElementById('gastos-sub').addEventListener('click', async () => {
+  if (conectado()) return;
+  const clientId = get('clientId', '');
+  if (!clientId) return toast('Pega tu Client ID de Google en Ajustes');
+  try {
+    initAuth(clientId);
+    await conectar();
+    await postConexion();
+    toast('Google Drive conectado');
+  } catch(e){ console.error(e); toast('No se pudo conectar: ' + e.message); }
+});
+
+// Al abrir la app: si ya hubo consentimiento antes, renovar el acceso sin molestar.
+// Google lo permite con prompt:'' mientras la sesion siga viva; si exige interaccion
+// (o el popup se bloquea), queda el aviso tocable en Gastos.
+async function reconectarSilencioso(){
+  const clientId = get('clientId', '');
+  if (!clientId || !get('driveConectadoAntes', false) || conectado()) return;
+  if (!window.google){ mostrarAvisoReconectar(); return; } // GIS aun no cargo
+  try {
+    initAuth(clientId);
+    await conectar({ silencioso: true });
+    await postConexion();
+    toast('Google Drive reconectado ✓');
+  } catch(e){
+    console.warn('Reconexion silenciosa fallo:', e.message);
+    mostrarAvisoReconectar();
+  }
+}
+window.addEventListener('load', () => setTimeout(reconectarSilencioso, 600));
 
 // Confirmar y subir + pantalla Gastos (Task 10)
 import { nombreCarpetaMes, siguienteNombre, hoyISO,
