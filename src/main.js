@@ -640,7 +640,9 @@ modeloEl.addEventListener('click', (ev) => {
 
 // Conexión a Google Drive (Task 9)
 import { initAuth, conectar, conectado, asegurarCarpeta, buscarCarpeta, listarNombres, subirJPEG, leerJSON, guardarJSON, descargarImagen,
-         buscarArchivo, moverYRenombrar, nombreDe, alDesconectar } from './drive.js';
+         buscarArchivo, moverYRenombrar, nombreDe, alDesconectar, subirOReemplazar } from './drive.js';
+import { paginar, generarPDF } from './pdfgastos.js';
+import { filas606, generarXLSX606 } from './f606.js';
 
 import { CLIENT_ID_APP } from './config.js';
 
@@ -1135,6 +1137,74 @@ async function refrescarGastos(){
   } catch(e){ console.error(e); }
 }
 document.getElementById('tab-gastos').addEventListener('click', () => { refrescarGastos(); revisarPendientes(); });
+
+// ---------- Generar documento de Gastos (Fase 3) ----------
+// Ticket largo → 2 columnas con los recortes de la plantilla (sup 0–48%, inf 50–100%).
+async function prepararImagen(blob){
+  const canvas = await archivoACanvas(blob);
+  const ratio = canvas.height / canvas.width;
+  if (ratio <= 3) return { ratio, partes: [blob] }; // JPEG original tal cual
+  const partes = [];
+  for (const [t, b] of [[0, 0.48], [0.5, 1]]){
+    const c = document.createElement('canvas');
+    c.width = canvas.width; c.height = Math.round(canvas.height * (b - t));
+    c.getContext('2d').drawImage(canvas, 0, Math.round(canvas.height * t), canvas.width, c.height, 0, 0, canvas.width, c.height);
+    partes.push(await canvasAJpeg(c));
+  }
+  return { ratio, partes };
+}
+
+async function generarDocumento(){
+  const ctx = window.__gastosMes;
+  if (!conectado() || !ctx || !ctx.mesId) return toast('Conecta Google Drive para generar');
+  const emp = empresaGuardada();
+  if (!empresaCompleta(emp)){ toast('Configura la Empresa en Ajustes (razón social y RNC)'); show('ajustes'); return; }
+  const idx = await leerJSON(ctx.mesId, '_gastos.json').catch(() => null);
+  const todas = idx?.facturas || [];
+  if (!todas.length) return toast('Este mes no tiene facturas registradas');
+  const completas = todas.filter(f => f.estado === 'completa' && !f.duplicada);
+  const sinValidar = todas.filter(f => f.estado !== 'completa').length;
+  if (!completas.length) return toast('No hay facturas completas — valida las pendientes primero');
+  if (sinValidar && !confirm(`Hay ${sinValidar} factura(s) sin validar. ¿Generar solo con las ${completas.length} completas?`)) return;
+  const carpetaMes = nombreCarpetaMes(mesVisto + '-01');                    // '2025-06_Junio'
+  const mesTexto = `${carpetaMes.split('_')[1]} ${mesVisto.slice(0, 4)}`;   // 'Junio 2025'
+  const btn = document.getElementById('btn-generar');
+  const bar = document.getElementById('lote-bar'), txtBar = document.getElementById('lote-txt');
+  btn.disabled = true; bar.hidden = false; document.getElementById('lote-dots').innerHTML = '';
+  try {
+    const items = [];
+    for (let i = 0; i < completas.length; i++){
+      const f = completas[i];
+      txtBar.textContent = `Generando — descargando ${i + 1} de ${completas.length}…`;
+      const blob = thumbCache.get(f.archivo) || await descargarImagen(ctx.mesId, f.archivo);
+      if (!blob){ toast(`No se pudo leer ${f.archivo}; el PDF sale sin ella`); continue; }
+      thumbCache.set(f.archivo, blob);
+      const prep = await prepararImagen(blob);
+      items.push({ archivo: f.archivo, total: f.total, ratio: prep.ratio,
+                   partes: await Promise.all(prep.partes.map(async b => new Uint8Array(await b.arrayBuffer()))) });
+    }
+    if (!items.length) throw new Error('no se pudo leer ninguna imagen');
+    txtBar.textContent = 'Generando — armando el PDF…';
+    const pdfBlob = await generarPDF(paginar(items), emp, mesTexto);
+    txtBar.textContent = 'Generando — armando el Excel 606…';
+    const xlsxBlob = await generarXLSX606(filas606(todas, mesVisto), emp, mesVisto, mesTexto);
+    txtBar.textContent = 'Generando — subiendo a Drive…';
+    const nombrePDF = `Gastos_${mesTexto.replace(' ', '_')}.pdf`;
+    const nombreXLSX = `606_${mesTexto.replace(' ', '_')}.xlsx`;
+    await subirOReemplazar(pdfBlob, nombrePDF, ctx.mesId);
+    await subirOReemplazar(xlsxBlob, nombreXLSX, ctx.mesId);
+    const archivos = [
+      new File([pdfBlob], nombrePDF, { type: 'application/pdf' }),
+      new File([xlsxBlob], nombreXLSX, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    ];
+    if (navigator.canShare && navigator.canShare({ files: archivos })){
+      try { await navigator.share({ files: archivos, title: `Gastos ${mesTexto}` }); } catch(e){ /* usuario cancelo */ }
+    }
+    toast(`Documento de ${mesTexto} generado y guardado en Drive ✓`);
+  } catch(e){ console.error(e); toast('No se pudo generar: ' + e.message); }
+  finally { btn.disabled = false; bar.hidden = true; actualizarBarraLote(); }
+}
+document.getElementById('btn-generar').addEventListener('click', generarDocumento);
 
 // ---------- Confirmación de una factura pendiente (panel de revisión) ----------
 const RV_CAMPOS = { 'rv-fecha':'fechaEmision','rv-ncf':'ncf','rv-rnc':'rncEmisor','rv-comercio':'nombreComercio','rv-subtotal':'subtotal','rv-itbis':'itbis','rv-total':'total' };
