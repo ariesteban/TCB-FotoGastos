@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ordenarEsquinas, esEstable, dimensionesDestino, cuadrilateroValido, areaCuadrilatero, boundingBox } from '../src/detect.js';
+import { ordenarEsquinas, esEstable, dimensionesDestino, cuadrilateroValido, areaCuadrilatero, boundingBox, escalaTrabajo } from '../src/detect.js';
+
+test('escalaTrabajo limita el lado mayor a maxLado y nunca amplia', () => {
+  assert.equal(escalaTrabajo(1920, 1080, 700), 700 / 1920);
+  assert.equal(escalaTrabajo(4000, 3000, 1200), 1200 / 4000);
+  assert.equal(escalaTrabajo(500, 400, 700), 1);
+});
 
 const cuad = [{x:100,y:10},{x:10,y:12},{x:12,y:200},{x:98,y:198}]; // desordenado
 

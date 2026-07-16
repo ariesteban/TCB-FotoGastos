@@ -438,7 +438,8 @@ async function cargarSiguienteDelLote(){
   actualizarBarraLote();
   try {
     const canvas = await archivoACanvas(lote.files[lote.i]);
-    const esquinas = detectarDocumento(canvas);
+    // Importacion: no es tiempo real, se trabaja a mayor resolucion para acertar mas.
+    const esquinas = detectarDocumento(canvas, 1200);
     window.__captura = { canvas, esquinas };
     procesarYRevisar();
   } catch(e){
