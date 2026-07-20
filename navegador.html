@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- OJO: esta pagina NO lleva apple-mobile-web-app-capable A PROPOSITO.
+     Anadida a la pantalla de inicio, iOS la abre en Safari (no en modo app), y ahi el
+     permiso de camara SI se recuerda por sitio (ajustes ᴀA → Configuracion del sitio web),
+     sin conceder la camara a ninguna otra pagina. Es la salida al bug de WebKit por el que
+     las apps web en modo pantalla completa vuelven a pedir permiso en cada apertura. -->
+<meta name="apple-mobile-web-app-title" content="FotoGastos">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<title>TCB FotoGastos</title>
+<style>
+  body{margin:0;height:100vh;display:grid;place-items:center;background:#0B0F16;color:#EAF1F8;
+       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-align:center;padding:24px}
+  a{color:#4E9BEB}
+</style>
+</head>
+<body>
+  <div>
+    <p>Abriendo TCB FotoGastos…</p>
+    <p><a href="index.html">Toca aquí si no abre solo</a></p>
+  </div>
+  <script>location.replace('index.html' + location.search + location.hash);</script>
+</body>
+</html>
