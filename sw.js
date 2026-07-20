@@ -1,4 +1,4 @@
-const VERSION = 'fase5-v3';
+const VERSION = 'fase5-v4';
 // Los binarios de vendor/tesseract/ NO se precachean (varios MB): se cachean al usarse.
 const PRECACHE = [
   './', 'index.html', 'navegador.html', 'styles.css', 'manifest.webmanifest',
