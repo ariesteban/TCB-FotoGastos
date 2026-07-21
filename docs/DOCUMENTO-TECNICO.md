@@ -97,9 +97,18 @@ Vendor (~40 MB, NO precacheados los grandes): `opencv.js`, `ort/` + `modelos/u2n
    `TOL_ESTABLE=0.02` (Fase 9, pedido de Ari: 2% del ancho tolera el temblor natural de la
    mano; un frame tembloroso con documento detectado DEGRADA el conteo `estables` en vez de
    reiniciarlo — la nitidez dentro del papel sigue siendo la guarda anti-foto-movida),
-   detección en vivo SIN rescate hull + `tocaBorde` (anti falsos positivos), import a 1200px,
-   editor de esquinas por defecto a marco completo (inset 2%). Cámara pide enfoque continuo
-   (`focusMode:'continuous'`) best-effort en camera.js.
+   import a 1200px, editor de esquinas por defecto a marco completo (inset 2%). Cámara pide
+   enfoque continuo (`focusMode:'continuous'`) best-effort en camera.js.
+   **Fase 11 — VIVO recalibrado con las 61 fotos reales (detectaba 2/61):** rescate hull
+   HABILITADO también en vivo (su solidez ≥0.8 filtra texturas) + `candidatosDeContorno`
+   (approx → minAreaRect con llenado ≥0.82 → hull, validados POR candidato) + el veto ya no
+   es `tocaBorde` (mataba tickets largos, que tocan arriba y abajo por definición) sino
+   `esCasiElEncuadre` (>90% del frame = detecté el fondo). Resultado medido: vivo 2→35/61,
+   importación auto 31→44/61, 17 ms/frame, CERO regresiones archivo-por-archivo. NO revertir
+   a "vivo estricto sin hull" sin re-medir contra `../Facturas de prueba/`.
+   Límite asumido y documentado en detect.js: sobre una funda plástica clara la detección
+   puede dar la funda (derecha, recibo legible dentro, ✂ ajusta); se intentó una guarda de
+   tinta y se DESCARTÓ con datos (6/35 quads legítimos daban tinta <0.006 — los mataría).
 9. Las facturas `completa` no se pueden eliminar desde la UI (registro fiscal); solo las de
    etiqueta de alerta (pendiente/incompleta/duplicada/sin procesar), y siempre a PAPELERA.
 10. `parsearTextoFactura` recibe `{rncPropio}` (RNC del perfil Empresa) para NO tomar el RNC
@@ -113,10 +122,10 @@ Vendor (~40 MB, NO precacheados los grandes): `opencv.js`, `ort/` + `modelos/u2n
   usuario repite la foto varias veces mirando cómo quedó; Gemini en cada intento agota
   la cuota gratis. La IA corre SOLO a pedido: toggle IA en la tarjeta o «Leer con IA»
   en Gastos. NO volver a poner 'ia' como `motorPreferido` por defecto.
-- **Lote/galería (Fase 10, `recortarImportada` en main.js)**: cascada
-  `detectarDocumento` → `rectanguloDePapel` (minAreaRect + guarda de llenado ≥0.82: una
-  factura ES un rectángulo, robusto a bordes ondulados donde approxPolyDP daba quads
-  torcidos) → IA → `bandaDePapel` → editor. Se acepta el PRIMERO que pase **dos** filtros:
+- **Lote/galería (`recortarImportada` en main.js)**: cascada
+  `detectarDocumento` → **`papelLlenaLaFoto`→`marcoCompleto` (Fase 11: patrón A medido —
+  el papel llena la foto al ~99% y la guarda de área lo rechazaba; 12/61 se resuelven
+  así)** → `rectanguloDePapel` (minAreaRect + llenado ≥0.82) → IA → `bandaDePapel` → editor. Se acepta el PRIMERO que pase **dos** filtros:
   1. **Forma** — `recorteConfiable`: cuadrilátero válido + área ≥15% + ángulos 65–115° +
      `ladosOpuestosParecidos` (≤30%).
   2. **Contenido** — `fraccionClara(canvas, esquinas) ≥ 0.75`. **Esta es la que importa.**
