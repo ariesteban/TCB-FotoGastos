@@ -15,10 +15,14 @@ y el Excel Formato 606. Multi-usuario sobre una carpeta compartida. La versión 
 
 - Producción: `https://bimcana.github.io/TCB-FotoGastos/` · repo `bimcana/TCB-FotoGastos`
 - Ramas: trabajo en `faseN` → merge --no-ff a `main` → `gh-pages` se fuerza a `main` y se empuja.
-- **GitHub Pages de la Full publica desde `main`** (verificado 2026-07-21: TODAS las
-  ejecuciones de `pages-build-deployment` tienen `head_branch: main`). `gh-pages` se
-  mantiene sincronizada por convención pero **no** es la que se publica. Ojo: la **Lite
-  sí publica desde `gh-pages`** — son distintas, no asumir la misma configuración.
+- **Rama que publica cada app** (verificado por API 2026-07-21 — NO asumir que son
+  iguales): la **Full desde `main`**, la **Lite desde `gh-pages`**. Funcionalmente da lo
+  mismo (idéntico pipeline, misma URL, misma velocidad); la diferencia es de higiene
+  operativa. **INVARIANTE que hace irrelevante la diferencia: empujar SIEMPRE las dos
+  ramas al mismo commit** (`git push origin main` + `git branch -f gh-pages main` +
+  `git push origin gh-pages`). Así la publicación funciona sea cual sea la configuración,
+  y nadie tiene que recordar cuál es cuál. Mejora pendiente de Ari (Settings → Pages):
+  poner la Lite también en `main` y borrar `gh-pages` en ambos → una sola rama, sin ritual.
 
 ## 2. Mapa de módulos (src/)
 
