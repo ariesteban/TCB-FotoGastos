@@ -88,8 +88,12 @@ Vendor (~40 MB, NO precacheados los grandes): `opencv.js`, `ort/` + `modelos/u2n
 7. `RATIO_LARGA = 4` (exportado de pdfgastos.js, calibrado con 57 facturas reales — regla
    de altura de Ari: NADA se divide salvo tickets de supermercado; un solo RD$ la dividida).
 8. Umbrales calibrados que no se cambian a ciegas: `UMBRAL_NITIDEZ=120`, `FRAMES_ESTABLES=4`,
+   `TOL_ESTABLE=0.02` (Fase 9, pedido de Ari: 2% del ancho tolera el temblor natural de la
+   mano; un frame tembloroso con documento detectado DEGRADA el conteo `estables` en vez de
+   reiniciarlo — la nitidez dentro del papel sigue siendo la guarda anti-foto-movida),
    detección en vivo SIN rescate hull + `tocaBorde` (anti falsos positivos), import a 1200px,
-   editor de esquinas por defecto a marco completo (inset 2%).
+   editor de esquinas por defecto a marco completo (inset 2%). Cámara pide enfoque continuo
+   (`focusMode:'continuous'`) best-effort en camera.js.
 9. Las facturas `completa` no se pueden eliminar desde la UI (registro fiscal); solo las de
    etiqueta de alerta (pendiente/incompleta/duplicada/sin procesar), y siempre a PAPELERA.
 10. `parsearTextoFactura` recibe `{rncPropio}` (RNC del perfil Empresa) para NO tomar el RNC
@@ -98,9 +102,15 @@ Vendor (~40 MB, NO precacheados los grandes): `opencv.js`, `ort/` + `modelos/u2n
 ## 5. Flujos clave (dónde tocar qué)
 
 - **Captura**: `buclDeteccion` (vivo, estricto) → shutter → `procesarYRevisar` →
-  `leerDatosDeFactura` (Gemini con AbortController → OCR local de respaldo; toggle IA·OCR)
-  → confirmar (SIEMPRE habilitado; sin fecha → subida provisional) → `subirFactura`.
-- **Lote/galería**: `importarLote` → por imagen: detección 1200px → IA → editor SIEMPRE.
+  `leerDatosDeFactura` → confirmar (SIEMPRE habilitado; sin fecha → subida provisional)
+  → `subirFactura`. **Motor por defecto = OCR LOCAL (Fase 9, decisión de Ari):** el
+  usuario repite la foto varias veces mirando cómo quedó; Gemini en cada intento agota
+  la cuota gratis. La IA corre SOLO a pedido: toggle IA en la tarjeta o «Leer con IA»
+  en Gastos. NO volver a poner 'ia' como `motorPreferido` por defecto.
+- **Lote/galería**: `importarLote` → por imagen: detección 1200px → IA → **Fase 9: si
+  `recorteConfiable(esquinas,w,h)` (detect.js, puro: cuadrilátero válido + área ≥15% +
+  4 ángulos entre 45–135°) el recorte se aplica SOLO, sin editor** (✂ en Revisión
+  re-ajusta); el editor solo abre para detecciones dudosas o fallidas.
 - **Ajena ("Sin procesar")**: `procesarAjena` → mismo pipeline → al confirmar, original a
   papelera (`__origenAjeno`, se limpia en shutter/lote/cancelar — no quitar esa limpieza).
 - **Revisor background: ELIMINADO (decisión de Ari 2026-07-21, protección de cuota).**

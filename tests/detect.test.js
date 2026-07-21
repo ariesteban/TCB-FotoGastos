@@ -1,7 +1,35 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ordenarEsquinas, esEstable, dimensionesDestino, cuadrilateroValido, areaCuadrilatero, boundingBox, escalaTrabajo,
-         mapearEsquinas, tocaBorde } from '../src/detect.js';
+         mapearEsquinas, tocaBorde, recorteConfiable } from '../src/detect.js';
+
+// --- Fase 9: confianza del recorte automatico en importacion ---
+
+test('recorteConfiable: rectangulo grande y centrado → confiable (sin editor)', () => {
+  const e = [{x:100,y:150},{x:900,y:150},{x:900,y:1100},{x:100,y:1100}];
+  assert.equal(recorteConfiable(e, 1000, 1300), true);
+});
+
+test('recorteConfiable: papel en perspectiva razonable → confiable', () => {
+  const e = [{x:180,y:120},{x:820,y:200},{x:880,y:1080},{x:120,y:1000}];
+  assert.equal(recorteConfiable(e, 1000, 1300), true);
+});
+
+test('recorteConfiable: cuadrilatero chico (menos del 15%) → editor', () => {
+  const e = [{x:400,y:500},{x:640,y:500},{x:640,y:800},{x:400,y:800}];
+  assert.equal(recorteConfiable(e, 1000, 1300), false);
+});
+
+test('recorteConfiable: angulo degenerado (aguja) → editor', () => {
+  // Cumple area y lados minimos pero una esquina queda casi plana (~180 grados)
+  const e = [{x:20,y:640},{x:980,y:600},{x:960,y:660},{x:40,y:700}];
+  assert.equal(recorteConfiable(e, 1000, 1300), false);
+});
+
+test('recorteConfiable: null o sin 4 puntos → editor', () => {
+  assert.equal(recorteConfiable(null, 1000, 1300), false);
+  assert.equal(recorteConfiable([{x:0,y:0},{x:1,y:0},{x:1,y:1}], 1000, 1300), false);
+});
 
 test('mapearEsquinas escala x/y de forma independiente', () => {
   assert.deepEqual(mapearEsquinas([{x:10,y:20}], 2, 0.5), [{x:20,y:10}]);

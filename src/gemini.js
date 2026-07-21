@@ -23,7 +23,10 @@ const PROMPT =
   'sin símbolo de moneda ni separador de miles. (5) nombreComercio es el nombre comercial destacado en la cabecera ' +
   '(el texto grande o del logo), NO la dirección, la sucursal ni frases genéricas; si hay razón social (SRL, SAS, EIRL), prefiérela. ' +
   '(6) Los vouchers suelen imprimir también el RNC del CLIENTE que compra: ese NUNCA es rncEmisor. ' +
-  '(7) Devuelve subtotal e itbis solo si están impresos (no los calcules). Si un dato no aparece, usa null.';
+  '(7) Devuelve subtotal e itbis solo si están impresos (no los calcules). ' +
+  '(8) La cabecera de un voucher de tarjeta trae la marca del verifón/procesador (CARDNET, VERIFONE, ' +
+  '«NOS UNE», PORTAL, VisaNet): eso NUNCA es nombreComercio — el comercio aparece después. ' +
+  'Si un dato no aparece, usa null.';
 
 // opciones.rncCliente: RNC del perfil de Empresa (el comprador). Se le dice al modelo
 // explicitamente para que jamas lo devuelva como rncEmisor (trampa real de vouchers).

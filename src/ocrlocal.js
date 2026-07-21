@@ -105,8 +105,11 @@ function extraerTotal(lineas){
 }
 
 // Lineas que NO son el nombre del comercio: contactos, direcciones, encabezados
-// fiscales y texto administrativo tipico de la cabecera de un voucher.
-const RE_NO_COMERCIO = /rnc|tel[ef.:\s]|tel$|fax|www\.|\.com|\.do\b|@|factura|cr[eé]dito|consumidor|fiscal|ncf|fecha|caja|cajero|calle|\bav\b|avenida|aut\.|autopista|carretera|\bkm\b|esq(uina|\.)|plaza|centro comercial|local\b|sucursal|cliente|orden|mesa\b/i;
+// fiscales y texto administrativo tipico de la cabecera de un voucher. Fase 9 (lista
+// negra pedida por Ari): CARDNET / VERIFONE / "NOS UNE" / PORTAL son la marca y el
+// eslogan del verifon (procesador de tarjetas) impresos arriba del voucher — jamas
+// son el comercio.
+const RE_NO_COMERCIO = /rnc|tel[ef.:\s]|tel$|fax|www\.|\.com|\.do\b|@|factura|cr[eé]dito|consumidor|fiscal|ncf|fecha|caja|cajero|calle|\bav\b|avenida|aut\.|autopista|carretera|\bkm\b|esq(uina|\.)|plaza|centro comercial|local\b|sucursal|cliente|orden|mesa\b|cardnet|verifone|nos\s+une|\bportal\b|visanet/i;
 const RE_SUFIJO_EMPRESA = /\b(srl|s\.?\s?r\.?\s?l|s\.?\s?a\.?\s?s?|eirl|e\.?\s?i\.?\s?r\.?\s?l)\b\.?/i;
 
 // El nombre del comercio suele ser de las PRIMERAS lineas (logo/encabezado). Se

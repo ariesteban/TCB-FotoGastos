@@ -41,6 +41,28 @@ export function cuadrilateroValido(e, wFrame, hFrame){
   return true;
 }
 
+// Confianza del recorte automatico (Fase 9): una factura es siempre un papel de 4
+// lados, a lo sumo en perspectiva. Si el cuadrilatero detectado tiene forma plausible
+// de papel, la importacion recorta SOLA (sin editor); el editor queda para los dudosos.
+// Criterio: cuadrilatero valido + area >= 15% de la imagen + los 4 angulos internos
+// entre 45 y 135 grados (una perspectiva razonable no los deforma mas que eso).
+export function recorteConfiable(e, wFrame, hFrame){
+  if (!e || e.length !== 4) return false;
+  if (!cuadrilateroValido(e, wFrame, hFrame)) return false;
+  if (areaCuadrilatero(e) < wFrame * hFrame * 0.15) return false;
+  for (let i = 0; i < 4; i++){
+    const a = e[(i + 3) % 4], b = e[i], c = e[(i + 1) % 4];
+    const v1 = { x: a.x - b.x, y: a.y - b.y };
+    const v2 = { x: c.x - b.x, y: c.y - b.y };
+    const den = Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y);
+    if (!den) return false;
+    const cos = Math.max(-1, Math.min(1, (v1.x * v2.x + v1.y * v2.y) / den));
+    const ang = Math.acos(cos) * 180 / Math.PI;
+    if (ang < 45 || ang > 135) return false;
+  }
+  return true;
+}
+
 export function escalaTrabajo(w, h, maxLado = 700){
   return Math.min(1, maxLado / Math.max(w, h));
 }

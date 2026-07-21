@@ -151,7 +151,7 @@ async function procesarYRevisar(){
   document.getElementById('seg-proc').classList.toggle('on', !!r);
   document.getElementById('seg-orig').classList.toggle('on', !r);
   actualizarUIFiltros();
-  motorPreferido = 'ia'; // cada factura nueva vuelve al motor por defecto
+  motorPreferido = 'ocr'; // cada factura nueva vuelve al motor por defecto (OCR: protege la cuota)
   leerDatosDeFactura(); // los datos no dependen del color; no se repite al cambiar de filtro
 }
 window.procesarYRevisar = procesarYRevisar;
@@ -205,9 +205,11 @@ function setCamposHabilitados(hab){
   CAMPOS_IDS.forEach(id => { document.getElementById(id).disabled = !hab; });
 }
 
-// Motor elegido para ESTA factura (se restablece a IA en cada captura). El toggle solo
-// aparece con API key; sin key siempre es OCR local, como antes.
-let motorPreferido = 'ia';
+// Motor elegido para ESTA factura. Fase 9: el defecto es OCR LOCAL (gratis) — el flujo
+// real del usuario es mirar como quedo la foto y repetirla varias veces; si Gemini
+// leyera cada intento, la cuota gratis se agota en nada. La IA corre SOLO cuando el
+// usuario la pide: toggle IA en la tarjeta o boton "Leer con IA" en Gastos.
+let motorPreferido = 'ocr';
 let abortLectura = null;
 
 // La LECTURA no usa el filtro visual activo: cada motor recibe el estado de imagen que
@@ -461,7 +463,7 @@ const visorRecortar = document.getElementById('visor-recortar');
 visorRecortar.addEventListener('click', () => { cerrarVisor(); ajustarEsquinas(); });
 
 import { cvReady } from './cvready.js';
-import { detectarDocumento, esEstable, nitidezRegion, tocaBorde } from './detect.js';
+import { detectarDocumento, esEstable, nitidezRegion, tocaBorde, recorteConfiable } from './detect.js';
 import { archivoACanvas } from './importar.js';
 
 // ---------- Importación en lote (Fase 2B) ----------
@@ -490,11 +492,15 @@ async function cargarSiguienteDelLote(){
   actualizarBarraLote();
   try {
     const canvas = await archivoACanvas(lote.files[lote.i]);
-    // Autorecorte: clasico (rapido) → IA local si fallo. El editor abre SIEMPRE con lo
-    // detectado precargado; "Aplicar" acepta el recorte y se pasa a los datos (Adobe Scan).
+    // Autorecorte: clasico (rapido) → IA local si fallo. Fase 9: una factura es siempre
+    // un papel de 4 lados (a lo sumo en perspectiva) — si el cuadrilatero detectado es
+    // CONFIABLE (recorteConfiable), se recorta SOLO, sin editor, como Adobe Scan; el
+    // editor queda para detecciones dudosas o fallidas (✂ en Revision re-ajusta).
     let esquinas = detectarDocumento(canvas, 1200);
     if (!esquinas) esquinas = await detectarConIAConOverlay(canvas);
-    esquinas = await abrirEditorEsquinas(canvas, esquinas);
+    if (!recorteConfiable(esquinas, canvas.width, canvas.height)){
+      esquinas = await abrirEditorEsquinas(canvas, esquinas);
+    }
     window.__captura = { canvas, esquinas };
     procesarYRevisar();
   } catch(e){
@@ -566,6 +572,11 @@ const UMBRAL_NITIDEZ = 120;   // varianza mínima del Laplaciano (ajustable en c
 // Bajado de 8 a 4 (~0.5 s): con la nitidez medida solo dentro del papel ya no hace
 // falta esperar tanto para confirmar estabilidad; dispara más rápido en campo.
 const FRAMES_ESTABLES = 4;
+// Fase 9 (pedido de Ari): tolerancia al temblor natural de la mano apuntando hacia
+// abajo — subida de 1% a 2% del ancho del frame. El disparo sigue exigiendo nitidez
+// real dentro del papel (UMBRAL_NITIDEZ), así que la foto no sale movida: solo se
+// deja de castigar el micro-movimiento entre frames.
+const TOL_ESTABLE = 0.02;
 let estables = 0, disparando = false;
 
 async function buclDeteccion(){
@@ -582,7 +593,7 @@ async function buclDeteccion(){
       dibujarOverlay(esquinas);
       const shutter = document.getElementById('shutter');
 
-      if (esquinas && esEstable(ultimasEsquinas, esquinas, frame.width * 0.01)){
+      if (esquinas && esEstable(ultimasEsquinas, esquinas, frame.width * TOL_ESTABLE)){
         estables++;
         statusTxt.textContent = 'Documento detectado — mantén firme';
         document.getElementById('cam-status').classList.add('lock');
@@ -597,7 +608,9 @@ async function buclDeteccion(){
           setTimeout(() => { procesarYRevisar(); disparando = false; }, 350);
         }
       } else {
-        estables = 0;
+        // Un frame tembloroso con el documento AUN detectado degrada el conteo en vez
+        // de reiniciarlo a cero: la mano humana tiembla y no debe reiniciar la espera.
+        estables = esquinas ? Math.max(0, estables - 1) : 0;
         shutter.classList.remove('arm');
         statusTxt.textContent = esquinas ? 'Documento detectado — mantén firme' : 'Buscando documento…';
         document.getElementById('cam-status').classList.toggle('lock', !!esquinas);
@@ -837,12 +850,18 @@ async function postConexion(){
   }
   document.getElementById('drive-estado').textContent =
     `Conectado ✓ — carpeta «${get('carpetaRaiz', 'Gastos_NCF')}» lista`;
+  ocultarAvisoReconectar();
+  refrescarGastos();
+  procesarCola();
+}
+
+// Estado "conectado" en Gastos: quita el aviso tocable y ESCONDE el boton Reconectar.
+// Centralizado para que ningun camino de conexion deje el boton visible (Fase 9).
+function ocultarAvisoReconectar(){
   const sub = document.getElementById('gastos-sub');
   sub.textContent = 'Google Drive · conectado';
   sub.classList.remove('accion');
   document.getElementById('btn-reconectar').hidden = true;
-  refrescarGastos();
-  procesarCola();
 }
 
 document.getElementById('btn-conectar').addEventListener('click', async () => {
@@ -875,7 +894,9 @@ alDesconectar(mostrarAvisoReconectar);
 // Reconexion en UN toque: mismo flujo que "Conectar Google Drive" de Ajustes. Con el
 // consentimiento ya dado, Google resuelve al instante (sin pantalla de permisos).
 async function reconectarConGesto(){
-  if (conectado()) return;
+  // Si otra via (pointerdown silencioso, visibilitychange) ya reconecto, el boton no
+  // debe quedar visible estando conectado: se esconde aqui tambien.
+  if (conectado()){ ocultarAvisoReconectar(); return; }
   const clientId = clientIdActivo();
   if (!clientId) return toast('Pega tu Client ID de Google en Ajustes');
   try {
