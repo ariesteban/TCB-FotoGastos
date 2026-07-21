@@ -468,8 +468,9 @@ const visorRecortar = document.getElementById('visor-recortar');
 visorRecortar.addEventListener('click', () => { cerrarVisor(); ajustarEsquinas(); });
 
 import { cvReady } from './cvready.js';
-import { detectarDocumento, esEstable, nitidezRegion, tocaBorde, recorteConfiable,
-         rectanguloDePapel, bandaDePapel, fraccionClara } from './detect.js';
+import { detectarDocumento, esEstable, nitidezRegion, recorteConfiable,
+         rectanguloDePapel, bandaDePapel, fraccionClara,
+         papelLlenaLaFoto, marcoCompleto, esCasiElEncuadre } from './detect.js';
 import { archivoACanvas } from './importar.js';
 
 // ---------- Importación en lote (Fase 2B) ----------
@@ -501,6 +502,12 @@ async function recortarImportada(canvas){
                   && fraccionClara(canvas, e) >= MIN_CLARO;
   const clasico = detectarDocumento(canvas, 1200);
   if (ok(clasico)) return clasico;
+  // Patron A (Fase 11): el papel llena la foto (blob claro ~99% que la guarda de area
+  // rechazaba) — el recorte correcto es el marco completo, sin editor.
+  if (papelLlenaLaFoto(canvas)){
+    const marco = marcoCompleto(canvas.width, canvas.height);
+    if (ok(marco)) return marco;
+  }
   // Rectangulo minimo: una factura ES un rectangulo; robusto a bordes ondulados/rotos.
   const rect = await conOverlay(() => rectanguloDePapel(canvas, 1200));
   if (ok(rect)) return rect;
@@ -614,8 +621,12 @@ async function buclDeteccion(){
       frame.getContext('2d').drawImage(video, 0, 0);
       // En vivo: criterio estricto (sin rescate) y sin cuadrilateros pegados al borde,
       // para no marcar "Documento detectado" sobre fondos texturados (falsos positivos).
-      let esquinas = detectarDocumento(frame, 700, { rescate: false });
-      if (esquinas && tocaBorde(esquinas, frame.width, frame.height)) esquinas = null;
+      // Fase 11 (calibrado con 61 fotos reales — vivo detectaba 2/61): rescate hull
+      // HABILITADO (su guarda de solidez >=0.8 filtra texturas) y el veto ya no es
+      // "esquina toca borde" (mataba tickets largos, que tocan arriba y abajo por
+      // definicion) sino "abarca casi todo el encuadre" (>90% = detecte el fondo).
+      let esquinas = detectarDocumento(frame, 700);
+      if (esquinas && esCasiElEncuadre(esquinas, frame.width, frame.height)) esquinas = null;
       dibujarOverlay(esquinas);
       const shutter = document.getElementById('shutter');
 

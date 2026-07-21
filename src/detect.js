@@ -166,12 +166,16 @@ export function mapearEsquinas(pts, sx, sy){
   return pts.map(p => ({ x: p.x * sx, y: p.y * sy }));
 }
 
-// true si alguna esquina queda a menos de `margen` (fraccion) del borde del frame.
-// La camara en vivo lo usa para descartar falsos positivos (fondos texturados que
-// producen cuadrilateros pegados a los bordes del encuadre).
-export function tocaBorde(esquinas, w, h, margen = 0.01){
+// true si al menos `minEsquinas` esquinas quedan a menos de `margen` (fraccion) del
+// borde del frame. La camara en vivo lo usa para descartar falsos positivos (fondos
+// texturados que producen cuadrilateros pegados a los bordes del encuadre).
+// Fase 11 (calibrado con las 61 fotos reales): con minEsquinas=1 mataba 18/61 casos
+// legitimos — una factura grande ROZA un borde por definicion. Los falsos positivos
+// reales (manta, granito, funda) abarcan el encuadre entero: tocan 2+ esquinas.
+export function tocaBorde(esquinas, w, h, margen = 0.01, minEsquinas = 1){
   const mx = w * margen, my = h * margen;
-  return esquinas.some(p => p.x <= mx || p.y <= my || p.x >= w - mx || p.y >= h - my);
+  const n = esquinas.filter(p => p.x <= mx || p.y <= my || p.x >= w - mx || p.y >= h - my).length;
+  return n >= minEsquinas;
 }
 
 // Requieren OpenCV (solo navegador) ---------------------------------------
@@ -209,28 +213,43 @@ function binCanny(gray){
 // mas vertices (bordes ondulados, esquinas redondeadas), su casco convexo con epsilon
 // creciente. La guarda de solidez evita dar por recibo una madeja de bordes fusionados
 // (p. ej. papel + brillo del fondo unidos por el dilate), cuyo casco seria basura.
-function aCuatroEsquinas(c, area, rescate = true){
+// Devuelve LISTA de candidatos de 4 esquinas para el contorno, en orden de confianza:
+// approxPolyDP directo → rectangulo minimo (si el contorno lo llena) → casco convexo.
+// Fase 11: antes devolvia UN candidato y si ese moria en la validacion posterior, los
+// demas caminos nunca se probaban (asi se perdieron recortes que el hull resolvia).
+function candidatosDeContorno(c, area, rescate = true){
+  const out = [];
   let approx = new cv.Mat();
   try {
     cv.approxPolyDP(c, approx, 0.02 * cv.arcLength(c, true), true);
-    if (approx.rows === 4 && cv.isContourConvex(approx)) return leerPuntos(approx);
+    if (approx.rows === 4 && cv.isContourConvex(approx)) out.push(leerPuntos(approx));
   } finally { approx.delete(); }
-  if (!rescate) return null; // camara en vivo: criterio estricto, sin casco convexo
+  // RECTANGULO MINIMO con guarda de llenado (calibrado con 61 fotos reales: el approx
+  // estricto fallaba en 41 — el borde de un papel real es ondulado). area/areaRect >=
+  // 0.82 exige que el contorno LLENE su rectangulo: rectangularidad real que vale
+  // tambien en vivo (una manta o funda arrugada no llena su rect).
+  const rot = cv.minAreaRect(c);
+  const areaRect = rot.size.width * rot.size.height;
+  if (areaRect && area / areaRect >= 0.82){
+    out.push(cv.RotatedRect.points(rot).map(q => ({ x: q.x, y: q.y })));
+  }
+  if (!rescate) return out;
   let hull;
   try {
     hull = new cv.Mat();
     cv.convexHull(c, hull);
-    if (area / cv.contourArea(hull) < 0.8) return null; // poco solido: no es un papel
-    const per = cv.arcLength(hull, true);
-    for (const e of [0.02, 0.04, 0.08]){
-      const ap = new cv.Mat();
-      try {
-        cv.approxPolyDP(hull, ap, e * per, true);
-        if (ap.rows === 4 && cv.isContourConvex(ap)) return leerPuntos(ap);
-      } finally { ap.delete(); }
+    if (area / cv.contourArea(hull) >= 0.8){ // solido: puede ser un papel
+      const per = cv.arcLength(hull, true);
+      for (const e of [0.02, 0.04, 0.08]){
+        const ap = new cv.Mat();
+        try {
+          cv.approxPolyDP(hull, ap, e * per, true);
+          if (ap.rows === 4 && cv.isContourConvex(ap)){ out.push(leerPuntos(ap)); break; }
+        } finally { ap.delete(); }
+      }
     }
-    return null;
   } finally { if (hull) hull.delete(); }
+  return out;
 }
 
 function leerPuntos(approx){
@@ -240,8 +259,11 @@ function leerPuntos(approx){
   return pts;
 }
 
-// Mayor cuadrilatero convexo del binario, en coords del canvas ORIGINAL (o null).
-function cuadrilateroDeBinaria(th, escala, minArea, rescate = true){
+// Mayor cuadrilatero VALIDO del binario, en coords del canvas ORIGINAL (o null).
+// Fase 11: la validez se comprueba POR CANDIDATO (no al final): antes, si el contorno
+// mas grande producia un cuadrilatero invalido, tumbaba la pasada completa aunque un
+// contorno menor tuviera el papel perfecto — greedy roto, medido en las fotos reales.
+function cuadrilateroDeBinaria(th, escala, minArea, rescate, wOrig, hOrig){
   let contours, hier;
   try {
     contours = new cv.MatVector();
@@ -254,10 +276,14 @@ function cuadrilateroDeBinaria(th, escala, minArea, rescate = true){
         c = contours.get(i);
         const area = cv.contourArea(c);
         if (area > mejorArea){
-          const pts = aCuatroEsquinas(c, area, rescate);
-          if (pts){
-            mejorArea = area;
-            mejor = pts.map(p => ({ x: p.x / escala, y: p.y / escala }));
+          // El PRIMER candidato valido gana (van en orden de confianza).
+          for (const pts of candidatosDeContorno(c, area, rescate)){
+            const ordenado = ordenarEsquinas(pts.map(p => ({ x: p.x / escala, y: p.y / escala })));
+            if (cuadrilateroValido(ordenado, wOrig, hOrig)){
+              mejorArea = area;
+              mejor = ordenado;
+              break;
+            }
           }
         }
       } finally {
@@ -270,6 +296,53 @@ function cuadrilateroDeBinaria(th, escala, minArea, rescate = true){
     if (contours) contours.delete();
   }
 }
+
+// Papel que LLENA la foto (Fase 11, patron A medido en las fotos reales: la gente
+// encuadra la factura a tope y el blob claro da 99% del frame — que cuadrilateroValido
+// rechaza por su guarda de >98%). Si el blob de Otsu cubre casi todo Y llena su
+// rectangulo minimo, la foto ES el papel: el recorte correcto es el marco completo.
+export function papelLlenaLaFoto(srcCanvas, minArea = 0.97, minLlenado = 0.95){
+  let p = null, th = null;
+  try {
+    p = prepararGris(srcCanvas, 700);
+    th = binOtsu(p.gray);
+    const mayor = contornoMayor(th);
+    if (!mayor) return false;
+    try {
+      if (mayor.area < p.w * p.h * minArea) return false;
+      const rot = cv.minAreaRect(mayor.contorno);
+      const areaRect = rot.size.width * rot.size.height;
+      return !!areaRect && mayor.area / areaRect >= minLlenado;
+    } finally { mayor.contorno.delete(); }
+  } catch(e){
+    console.warn('papelLlenaLaFoto fallo:', e.message);
+    return false;
+  } finally {
+    if (th) th.delete();
+    if (p){ p.gray.delete(); p.mat.delete(); }
+  }
+}
+
+// Marco completo con un inset del 1%: el recorte de una foto que es toda papel. Puro.
+export function marcoCompleto(w, h, inset = 0.01){
+  const mx = w * inset, my = h * inset;
+  return [{ x: mx, y: my }, { x: w - mx, y: my }, { x: w - mx, y: h - my }, { x: mx, y: h - my }];
+}
+
+// El cuadrilatero abarca casi todo el encuadre: en VIVO eso es "detecte el fondo", no
+// un documento (Fase 11 — sustituye al veto por esquinas-en-borde, que mataba tickets
+// largos legitimos: una banda vertical toca 4 esquinas del borde pero solo cubre ~35%).
+export function esCasiElEncuadre(esquinas, w, h, maxFraccion = 0.90){
+  return areaCuadrilatero(esquinas) > w * h * maxFraccion;
+}
+
+// NOTA DE CALIBRACION (Fase 11): se intento una guarda de TINTA (fraccion de pixeles
+// oscuros dentro del quad) para distinguir el recibo de una funda plastica blanca (caso
+// GBC). Medida sobre los 35 quads legitimos de las fotos reales: 6 daban tinta
+// 0.001-0.006 (el Otsu global no separa tinta de papel cuando el fondo oscuro domina la
+// escena) — un veto de tinta mataria detecciones validas. Se DESCARTO. Limite asumido:
+// sobre una funda clara, la deteccion puede dar la funda completa (derecha, con el
+// recibo legible dentro y ajustable con el editor), que es mejor que no detectar nada.
 
 export function detectarDocumento(srcCanvas, maxLado = 700, opciones = {}){
   const { rescate = true } = opciones;
@@ -290,11 +363,10 @@ export function detectarDocumento(srcCanvas, maxLado = 700, opciones = {}){
       let th;
       try {
         th = bin(gray);
-        const pts = cuadrilateroDeBinaria(th, escala, w * h * 0.12, rescate);
-        if (pts){
-          const ordenado = ordenarEsquinas(pts);
-          if (cuadrilateroValido(ordenado, srcCanvas.width, srcCanvas.height)) return ordenado;
-        }
+        // La validez se comprueba POR CANDIDATO dentro (Fase 11).
+        const pts = cuadrilateroDeBinaria(th, escala, w * h * 0.12, rescate,
+          srcCanvas.width, srcCanvas.height);
+        if (pts) return pts;
       } finally { if (th) th.delete(); }
     }
     return null;
@@ -452,7 +524,7 @@ export function esquinasDeMascara(maskCanvas, wOrig, hOrig){
         c = contours.get(i);
         const area = cv.contourArea(c);
         if (area > mejorArea){
-          const pts = aCuatroEsquinas(c, area);
+          const pts = candidatosDeContorno(c, area)[0] || null; // mascara IA: primer candidato basta
           if (pts){ mejorArea = area; mejor = pts; }
         }
       } finally { if (c) c.delete(); }

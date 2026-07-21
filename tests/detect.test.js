@@ -2,7 +2,32 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ordenarEsquinas, esEstable, dimensionesDestino, cuadrilateroValido, areaCuadrilatero, boundingBox, escalaTrabajo,
          mapearEsquinas, tocaBorde, recorteConfiable, angulosInternos, ladosOpuestosParecidos,
-         bordesLaterales, extenderLateralesAlMarco } from '../src/detect.js';
+         bordesLaterales, extenderLateralesAlMarco, marcoCompleto, esCasiElEncuadre } from '../src/detect.js';
+
+// --- Fase 11: guardas calibradas con las 61 fotos reales ---
+
+test('tocaBorde: con minEsquinas=2 una factura que roza UN borde ya no se rechaza', () => {
+  const rozaUno = [{x:2,y:200},{x:500,y:210},{x:490,y:900},{x:5,y:890}]; // 2 esquinas pegadas a la izquierda (margen 1% de 700 = 7px)
+  assert.equal(tocaBorde(rozaUno, 700, 1000), true);        // criterio viejo (1 esquina)
+  assert.equal(tocaBorde(rozaUno, 700, 1000, 0.01, 2), true); // izquierda entera toca: 2 esquinas
+  const rozaEsquina = [{x:2,y:200},{x:500,y:210},{x:490,y:900},{x:60,y:890}]; // solo 1 esquina
+  assert.equal(tocaBorde(rozaEsquina, 700, 1000, 0.01, 2), false);
+});
+
+test('esCasiElEncuadre: el fondo entero si, un ticket-banda no', () => {
+  const fondo = [{x:5,y:5},{x:695,y:5},{x:695,y:995},{x:5,y:995}];
+  assert.equal(esCasiElEncuadre(fondo, 700, 1000), true);
+  // Banda vertical: toca 4 esquinas del borde pero solo cubre ~36% — es un ticket largo
+  const banda = [{x:220,y:0},{x:470,y:0},{x:470,y:1000},{x:220,y:1000}];
+  assert.equal(esCasiElEncuadre(banda, 700, 1000), false);
+});
+
+test('marcoCompleto: inset del 1% y orden tl,tr,br,bl', () => {
+  const m = marcoCompleto(1000, 2000);
+  assert.deepEqual(m[0], { x: 10, y: 20 });
+  assert.deepEqual(m[2], { x: 990, y: 1980 });
+  assert.equal(recorteConfiable(m, 1000, 2000), true); // el marco es un recorte valido
+});
 
 // --- Fase 10: guardas de forma de papel y banda lateral ---
 
