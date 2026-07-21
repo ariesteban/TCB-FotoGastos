@@ -158,3 +158,21 @@ test('total pelado sigue funcionando cuando no hay etiqueta fuerte', () => {
   const t = 'COMERCIO X\nSUB-TOTAL 100.00\nTOTAL 118.00';
   assert.equal(parsearTextoFactura(t).total, 118);
 });
+
+// --- Fase 9: lista negra del verifon (CARDNET / VERIFONE / NOS UNE / PORTAL) ---
+
+test('nombreComercio: CARDNET (marca del verifon) nunca es el comercio', () => {
+  const d = parsearTextoFactura(VOUCHER);
+  assert.notEqual(d.nombreComercio, 'CARDNET');
+});
+
+test('nombreComercio: salta la cabecera VERIFONE / NOS UNE / PORTAL del voucher', () => {
+  const t = `VERIFONE
+NOS UNE PORTAL
+FARMACIA LA ECONOMICA SRL
+AV. BARCELO, BAVARO
+RNC 131000000
+NCF B0100000123
+TOTAL RD$ 850.00`;
+  assert.equal(parsearTextoFactura(t).nombreComercio, 'FARMACIA LA ECONOMICA SRL');
+});
