@@ -140,6 +140,18 @@ Vendor (~40 MB, NO precacheados los grandes): `opencv.js`, `ort/` + `modelos/u2n
   borde del papel, así que la geometría del papel da el mismo resultado y es fiable.
 - **Ajena ("Sin procesar")**: `procesarAjena` → mismo pipeline → al confirmar, original a
   papelera (`__origenAjeno`, se limpia en shutter/lote/cancelar — no quitar esa limpieza).
+- **Duplicado al leer el NCF (Fase 12)**: `actualizarEntradaConReArchivo` llama a
+  `marcarSiDuplicada` (usa `repiteNCF`, puro en indice.js) en sus TRES ramas. Antes solo
+  se chequeaba al mover de carpeta de mes → una factura de Lite (llega sin NCF y solo se
+  conoce al «Leer con IA», normalmente en el mismo mes) nunca se marcaba. `repiteNCF`
+  excluye la propia factura y las YA-duplicadas: así el original nunca se marca (no se
+  cae del 606), solo la copia nueva. NO cambiar a marcar ambas.
+- **Eliminar una factura subida por OTRA cuenta (Fase 12)**: el archivo de Lite lo posee
+  el empleado, así que `trashed:true` da 403 `insufficientFilePermissions`. `eliminarFactura`
+  detecta el 403 con `esErrorDePermiso` (drive.js, puro) y cae a `quitarDeCarpeta`
+  (removeParents del mes): la copia sigue en el Drive de origen pero desaparece de Gastos.
+  El `_gastos.json` y la cola de revisión se limpian igual. No convertir esto en borrado
+  permanente (no somos dueños del archivo).
 - **Revisor background: ELIMINADO (decisión de Ari 2026-07-21, protección de cuota).**
   La IA corre SOLO al capturar/importar foto nueva (`leerDatosDeFactura`) y al presionar
   «Leer con IA» (`leerConIAAhora`). NO re-agregar disparadores automáticos de Gemini.
